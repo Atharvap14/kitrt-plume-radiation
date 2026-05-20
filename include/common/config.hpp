@@ -1,0 +1,479 @@
+/*!
+ * @file config.h
+ * @brief Class to handle all options and their pre and postprocessing.
+ *         DO NOT CREATE SETTERS FOR THIS CLASS! ALL OPTIONS ARE CONSTANT (after SetPostprocessing).
+ *
+ * @author S. Schotthöfer
+ */
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <filesystem>
+#include <map>
+#include <vector>
+
+#include "globalconstants.hpp"
+
+// Forward declaration
+class OptionBase;
+
+/*!
+ * @class Config
+ * @brief Main class for defining the problem; basically this class reads the configuration file, and
+ *        stores all the information.
+ */
+
+class Config
+{
+  private:
+    std::string _fileName; /*!< @brief Name of the current file without extension */
+    bool _baseConfig;
+
+    // int _commRank, _commSize; /*!< @brief MPI rank and size.*/    // Not yet used!!
+
+    // --- Options ---
+    // File Structure
+    std::string _inputDir;    /*!< @brief Directory for input files*/
+    std::string _outputDir;   /*!< @brief Directory for output files*/
+    std::string _outputFile;  /*!< @brief Name of output file*/
+    std::string _logDir;      /*!< @brief Directory of log file*/
+    std::string _logFileName; /*!< @brief Name of log file*/
+    std::string _meshFile;    /*!< @brief Name of mesh file*/
+    std::string _ctFile;      /*!< @brief Name of CT file*/
+    // Quadrature
+    QUAD_NAME _quadName;       /*!< @brief Quadrature Name*/
+    unsigned short _quadOrder; /*!< @brief Quadrature Order*/
+    unsigned _nQuadPoints;     /*!< @brief Number of quadrature points. (Deprecated)*/
+    // std::vector<double> _1dIntegrationBounds; /*!< @brief Quadrature Order*/
+
+    // Mesh
+    unsigned _nCells;                            /*!< @brief Number of cells in the mesh */
+    unsigned short _dim;                         /*!< @brief spatial dimensionality of the mesh/test case */
+    bool _forcedConnectivityWrite;               /*!< @brief If true, the meshconnectivity is always computed and written to .con file */
+    bool _loadrestartSolution;                   /*!< @brief If true, the simulation loads a restart solution from file */
+    unsigned long _saveRestartSolutionFrequency; /*!< @brief Frequency for saving restart solution to file */
+
+    // Boundary Conditions
+    /*!< @brief List of all Pairs (marker, BOUNDARY_TYPE), e.g. (farfield,DIRICHLET).
+         Each Boundary Conditions must have an entry in enum BOUNDARY_TYPE*/
+    std::vector<std::pair<std::string, BOUNDARY_TYPE>> _boundaries;
+    unsigned short _nMarkerDirichlet;          /*!< @brief Number of Dirichlet BC markers. Enum entry: DIRICHLET */
+    unsigned short _nMarkerNeumann;            /*!< @brief Number of Neumann BC markers. Enum entry: Neumann */
+    std::vector<std::string> _MarkerDirichlet; /*!< @brief Dirichlet BC markers. */
+    std::vector<std::string> _MarkerNeumann;   /*!< @brief Neumann BC markers. */
+
+    // Solver
+    bool _HPC;                        /* Triggers usage of faster SN solvers */
+    double _CFL;                      /*!< @brief CFL Number for Solver*/
+    double _tEnd;                     /*!< @brief Final Time for Simulation */
+    PROBLEM_NAME _problemName;        /*!< @brief Name of predefined Problem   */
+    SOLVER_NAME _solverName;          /*!< @brief Name of the used Solver */
+    ENTROPY_NAME _entropyName;        /*!< @brief Name of the used Entropy Functional */
+    unsigned short _maxMomentDegree;  /*!< @brief Maximal Order of Moments for PN and MN Solver */
+    unsigned short _reconsOrder;      /*!< @brief Spatial Order of Accuracy for Solver */
+    bool _realizabilityRecons;        /*!< @brief Turns realizability reconstruction on/off for u sampling and MN solver */
+    bool _isMomentSolver;             /*!< @brief Flag for the moment base (PN and MN) solvers */
+    unsigned short _rungeKuttaStages; /*!< @brief Specify the number of Runge Kutta time integration stages */
+
+    /*!< @brief If true, very low entries (10^-10 or smaller) of the flux matrices will be set to zero,
+     * to improve floating point accuracy */
+    bool _cleanFluxMat;
+    bool _allGaussPts; /*!< @brief If true, the SN Solver uses all Gauss pts in the quadrature */
+    bool _csd;         /*!< @brief If true, continuous slowing down approximation will be used */
+
+    // --- Problems ---
+
+    // Linesource
+    double _sigmaS; /*!< @brief Scattering coeffient for Linesource test case */
+    // Checkerboard
+    double _magQ; /*!< @brief Magnitude of Source */
+    // Database ICRU
+    std::string _dataDir; /*!< @brief material directory */
+    // ElectronRT
+    std::string _hydrogenFile;      /*!< @brief Name of hydrogen cross section file path*/
+    std::string _oxygenFile;        /*!< @brief Name of oxygen cross section file path */
+    std::string _stoppingPowerFile; /*!< @brief Name of stopping power file path */
+    // Lattice
+    double _dsgnAbsBlue;                        /*!< @brief Absorption in all blue blocks */
+    double _dsgnScatterWhite;                   /*!< @brief Scattering in all white blocks */
+    std::vector<double> _dsgnAbsIndividual;     /*!< @brief Absorption in all 7x7 blocks of the Lattice test case (up left to low right) */
+    unsigned short _nDsgnAbsIndividual;         /*!< @brief Number of individual blocks. Needs to be 49*/
+    std::vector<double> _dsgnScatterIndividual; /*!< @brief Scatter in all 7x7 blocks of the Lattice test case (up left to low right) */
+    unsigned short _nDsgnScatterIndividual;     /*!< @brief Number of individual blocks. Needs to be 49*/
+
+    // Hohlraum
+    unsigned short _nProbingCellsLineGreenHohlraum; /*!< @brief Number SamplingPoints for Hohlraum Green region sampling.*/
+    double _posCenterXHohlraum;                     /*!< @brief Center of the Hohlraum Green region. */
+    double _posCenterYHohlraum;                     /*!< @brief Center of the Hohlraum Green region. */
+    double _posRedRightTop;                         /*!< @brief y coord of the top of the right red area  */
+    double _posRedLeftTop;                          /*!< @brief y coord of the top of the left red area  */
+    double _posRedRightBottom;                      /*!< @brief y coord of the bottom of the right red area  */
+    double _posRedLeftBottom;                       /*!< @brief y coord of the bottom of the left red area  */
+    double _posRedLeftBorder;                       /*!< @brief pos of the inner border of the left red area  */
+    double _posRedRightBorder;                      /*!< @brief pos of the inner border of the right red area  */
+
+    // Plume radiation
+    PLUME_BACKEND_NAME _plumeBackend;      /*!< @brief Backend for the plume DTM solver */
+    std::string _plumeFieldFile;           /*!< @brief Structured axisymmetric plume field CSV */
+    bool _plumeSyntheticField;             /*!< @brief Use generated synthetic field instead of PLUME_FIELD_FILE */
+    bool _plumeNozzleShadow;               /*!< @brief Enable a simple cylindrical nozzle shadow */
+    bool _plumeWriteVTK;                   /*!< @brief Write a VTK polydata view of the base heat-flux profile */
+    double _plumeBaseZ;                    /*!< @brief Axial coordinate of the base plane [m] */
+    double _plumeBaseRadius;               /*!< @brief Maximum base radius sampled [m] */
+    unsigned long _plumeBaseSamples;       /*!< @brief Number of base radial samples */
+    unsigned long _plumeRayPolarSamples;   /*!< @brief Number of upper-hemisphere polar ray samples */
+    unsigned long _plumeRayAzimuthSamples; /*!< @brief Number of upper-hemisphere azimuthal ray samples */
+    double _plumeRayStep;                  /*!< @brief Ray marching step [m] */
+    double _plumeRayMaxDistance;           /*!< @brief Maximum ray distance [m] */
+    double _plumeIncomingIntensity;        /*!< @brief Background incoming intensity at the far ray boundary [W/(m2 sr)] */
+    double _plumeNozzleRadius;             /*!< @brief Cylindrical nozzle shadow radius [m] */
+    double _plumeNozzleLength;             /*!< @brief Cylindrical nozzle shadow length above base [m] */
+    double _plumeSyntheticTemperature;     /*!< @brief Synthetic fixture temperature [K] */
+    double _plumeSyntheticKappa;           /*!< @brief Synthetic fixture absorption coefficient [1/m] */
+    double _plumeSyntheticZMax;            /*!< @brief Synthetic fixture axial extent above base [m] */
+    double _plumeSyntheticRMax;            /*!< @brief Synthetic fixture radial extent [m] */
+    unsigned long _plumeSyntheticZCells;   /*!< @brief Synthetic fixture axial node count */
+    unsigned long _plumeSyntheticRCells;   /*!< @brief Synthetic fixture radial node count */
+
+    // CSD
+    double _maxEnergyCSD; /*!< @brief Maximum energy for CSD simulation */
+
+    // --- other variables ---
+    // Scattering Kernel
+    KERNEL_NAME _kernelName; /*!< @brief Scattering Kernel Name*/
+
+    // Spherical Basis
+    SPHERICAL_BASIS_NAME _sphericalBasisName; /*!< @brief Name of the basis on the unit sphere */
+
+    // Optimizer
+    OPTIMIZER_NAME _entropyOptimizerName; /*!< @brief Choice of optimizer */
+    bool _entropyDynamicClosure;          /*!< @brief Flag for dynamic closure ansatz for normalized mn solver */
+    double _optimizerEpsilon;             /*!< @brief termination criterion epsilon for Newton Optmizer */
+    unsigned long _newtonIter;            /*!< @brief Maximal Number of newton iterations */
+    double _newtonStepSize;               /*!< @brief Stepsize factor for newton optimizer */
+    unsigned long _newtonLineSearchIter;  /*!< @brief Maximal Number of line search iterations for newton optimizer */
+    bool _newtonFastMode;                 /*!< @brief If true, we skip the NewtonOptimizer for quadratic entropy and assign alpha = u */
+    double _regularizerGamma;             /*!< @brief Regularization parameter for the regularized closure */
+    // NeuralModel
+    unsigned short _neuralModel;           /*!< @brief  Version number of the employed neural model */
+    unsigned short _neuralGamma;           /*!< @brief  Gamma value (regularization parameter) of the employed neural model */
+    bool _enforceNeuralRotationalSymmetry; /*!< @brief  Flag if rotational symmtry of model is enforced */
+    // Output Options
+    unsigned short _nVolumeOutput;            /*!< @brief Number of volume outputs */
+    std::vector<VOLUME_OUTPUT> _volumeOutput; /*!< @brief Output groups for volume output*/
+    unsigned short _volumeOutputFrequency;    /*!< @brief Frequency of vtk write of volume output*/
+
+    unsigned short _nScreenOutput;            /*!< @brief Number of screen outputs */
+    std::vector<SCALAR_OUTPUT> _screenOutput; /*!< @brief Output groups for screen output*/
+    unsigned short _screenOutputFrequency;    /*!< @brief Frequency of screen output*/
+
+    unsigned short _nHistoryOutput;            /*!< @brief Number of screen outputs */
+    std::vector<SCALAR_OUTPUT> _historyOutput; /*!< @brief Output groups for screen output*/
+    unsigned short _historyOutputFrequency;    /*!< @brief Frequency of screen output*/
+
+    // Data Generator Settings
+    /*!< @brief Check, if data generator mode is active. If yes, no solver is called, but instead the data generator is executed */
+    bool _dataGeneratorMode;
+    SAMPLER_NAME _sampler;            /*!< @brief Sampling mode for regression or classification datasets */
+    unsigned long _tainingSetSize;    /*!< @brief Size of training data set for data generator */
+    bool _sizeByDimension;            /*!< @brief If true, the value of _trainingSetSize is the number of gridpoints in one dimension */
+    unsigned long _maxValFirstMoment; /*!< @brief Size of training data set for data generator */
+    double _RealizableSetEpsilonU0;   /*!< @brief Distance to 0 of the sampled moments to the boundary of the realizable set */
+    double _RealizableSetEpsilonU1;   /*!< @brief norm(u_1)/u_0 !< _RealizableSetEpsilonU1 */
+    bool _normalizedSampling;         /*!< @brief Flag for sampling of normalized moments, i.e. u_0 =1 */
+    bool _alphaSampling;              /*!< @brief Flag for sampling alpha instead of u */
+    double _alphaBound;               /*!< @brief The norm boundary for the sampling range of alpha*/
+    double _minEVAlphaSampling;       /*!< @brief Rejection sampling criterion is a minimal eigenvalue threshold */
+    bool _sampleUniform;              /*!< @brief If true, samples uniform, if false, sampleswith cutoff normal distribution */
+    double _maxSamplingVelocity;      /*!< @brief The lower bound for the velocity space in the 1D classification sampler */
+    // double _minSamplingVelocity;      /*!< @brief The upper bound for the velocity space in the 1D classification sampler */
+    double _maxSamplingTemperature; /*!< @brief The lower bound for the interval to draw temperatures for the 1D classification sampler */
+    double _minSamplingTemperature; /*!< @brief The upper bound for the interval to draw temperatures for the 1D classification sampler */
+    unsigned short _nTemperatures;  /*!< @brief The number of sampling temperatures for the kinetic density sampler */
+    // --- Parsing Functionality and Initializing of Options ---
+    /*!
+     * @brief Set default values for all options not yet set.
+     */
+    void SetDefault( void );
+
+    /*!
+     * @brief Set the config options.
+     *        ==> Set new config options here.
+     */
+    void SetConfigOptions( void );
+
+    /*!
+     * @brief Set the config file parsing.
+     */
+    void SetConfigParsing( std::string case_filename );
+
+    /*!
+     * @brief Config file screen output.
+     */
+    void SetOutput( void );
+
+    /*!
+     * @brief Initializes pointers to null
+     */
+    void SetPointersNull( void );
+
+    /*!
+     * @brief Config file postprocessing.
+     */
+    void SetPostprocessing( void );
+
+    /*!
+     * @brief breaks an input line from the config file into a set of tokens
+     * @param str the input line string
+     * @param option_name the name of the option found at the beginning of the line
+     * @param option_value the tokens found after the "=" sign on the line
+     * @return false if the line is empty or a commment, true otherwise
+     */
+    bool TokenizeString( std::string& str, std::string& option_name, std::vector<std::string>& option_value );
+
+    /*--- all_options is a map containing all of the options. This is used during config file parsing
+     to track the options which have not been set (so the default values can be used). Without this map
+     there would be no list of all the config file options. ---*/
+    std::map<std::string, bool> _allOptions;
+
+    /*--- brief param is a map from the option name (config file string) to its decoder (the specific child
+     class of OptionBase that turns the string into a value) ---*/
+    std::map<std::string, OptionBase*> _optionMap;
+
+    // ---- Option Types ----
+
+    // All of the addXxxOptions take in the name of the option, and a refernce to the field of that option
+    // in the option structure. Depending on the specific type, it may take in a default value, and may
+    // take in extra options. The addXxxOptions mostly follow the same pattern, so please see addDoubleOption
+    // for detailed comments.
+    //
+    // List options are those that can be an unknown number of elements, and also take in a reference to
+    // an integer. This integer will be populated with the number of elements of that type unmarshaled.
+    //
+    // Array options are those with a fixed number of elements.
+    //
+    // List and Array options should also be able to be specified with the string "NONE" indicating that there
+    // are no elements. This allows the option to be present in a config file but left blank.
+
+    /*!< @brief addDoubleOption creates a config file parser for an option with the given name whose
+     value can be represented by a su2double.*/
+
+    // Simple Options
+    void AddBoolOption( const std::string name, bool& option_field, bool default_value );
+
+    void AddDoubleOption( const std::string name, double& option_field, double default_value );
+
+    void AddIntegerOption( const std::string name, int& option_field, int default_value );
+
+    void AddLongOption( const std::string name, long& option_field, long default_value );
+
+    void AddStringOption( const std::string name, std::string& option_field, std::string default_value );
+
+    void AddUnsignedLongOption( const std::string name, unsigned long& option_field, unsigned long default_value );
+
+    void AddUnsignedShortOption( const std::string name, unsigned short& option_field, unsigned short default_value );
+
+    // enum types work differently than all of the others because there are a small number of valid
+    // string entries for the type. One must also provide a list of all the valid strings of that type.
+    template <class Tenum>
+    void AddEnumOption( const std::string name, Tenum& option_field, const std::map<std::string, Tenum>& enum_map, Tenum default_value );
+
+    // List Options
+    void AddStringListOption( const std::string name, unsigned short& input_size, std::vector<std::string>& option_field );
+
+    void AddDoubleListOption( const std::string name, unsigned short& input_size, std::vector<double>& option_field );
+
+    template <class Tenum>
+    void AddEnumListOption( const std::string name,
+                            unsigned short& num_marker,
+                            std::vector<Tenum>& option_field,
+                            const std::map<std::string, Tenum>& enum_map );
+
+    // Initialize the cmdline and file logger
+    void InitLogger();
+
+    // Helper functions
+    template <typename K, typename V> K findKey( const std::map<K, V>& myMap, const V& valueToFind );
+
+  public:
+    /*!
+     * @brief Constructor of the class which reads the input file.
+     */
+    Config( std::string case_filename );
+
+    /*!
+     * @brief Destructor of the class.
+     */
+    ~Config( void );
+
+    // ---- Getters for option values ----
+
+    /*!
+     * @brief Get Value of this option.
+     *        Please keep alphabetical order within each subcategory
+     */
+    // File structure
+    std::string inline GetCTFile() const { return std::filesystem::path( _ctFile ).lexically_normal(); }
+
+    std::string inline GetLogDir() const { return std::filesystem::path( _logDir ).lexically_normal(); }
+    std::string inline GetLogFile() const { return std::filesystem::path( _logFileName ).lexically_normal(); }
+    std::string inline GetMeshFile() const { return std::filesystem::path( _meshFile ).lexically_normal(); }
+    std::string inline GetOutputDir() const { return std::filesystem::path( _outputDir ).lexically_normal(); }
+    std::string inline GetOutputFile() const { return std::filesystem::path( _outputFile ).lexically_normal(); }
+
+    // Problem Files
+    std::string inline GetHydrogenFile() const { return std::filesystem::path( _hydrogenFile ).lexically_normal(); }
+    std::string inline GetOxygenFile() const { return std::filesystem::path( _oxygenFile ).lexically_normal(); }
+    std::string inline GetStoppingPowerFile() const { return std::filesystem::path( _stoppingPowerFile ).lexically_normal(); }
+    std::string inline GetDataDir() const { return std::filesystem::path( _dataDir ).lexically_normal(); }
+
+    // Quadrature Structure
+    unsigned GetNQuadPoints() const { return _nQuadPoints; }
+    QUAD_NAME inline GetQuadName() const { return _quadName; }
+    unsigned short inline GetQuadOrder() const { return _quadOrder; }
+
+    // Mesh Structure
+    unsigned GetNCells() const { return _nCells; }
+    unsigned short GetDim() const { return _dim; }
+    bool inline GetForcedConnectivity() const { return _forcedConnectivityWrite; }
+    bool inline GetLoadRestartSolution() const { return _loadrestartSolution; }
+    unsigned long inline GetSaveRestartSolutionFrequency() const { return _saveRestartSolutionFrequency; }
+
+    // Solver Structure
+    bool inline GetHPC() const { return _HPC; }
+
+    double inline GetCFL() const { return _CFL; }
+    bool inline GetCleanFluxMat() const { return _cleanFluxMat; }
+    ENTROPY_NAME inline GetEntropyName() const { return _entropyName; }
+    unsigned short inline GetMaxMomentDegree() const { return _maxMomentDegree; }
+    PROBLEM_NAME inline GetProblemName() const { return _problemName; }
+    unsigned inline GetSpatialOrder() { return _reconsOrder; }
+    SOLVER_NAME inline GetSolverName() const { return _solverName; }
+    double inline GetTEnd() const { return _tEnd; }
+    bool inline GetSNAllGaussPts() const { return _allGaussPts; }
+    bool inline GetIsCSD() const { return _csd; }
+    bool inline GetRealizabilityReconstruction() { return _realizabilityRecons; }
+
+    // Linesource
+    double inline GetSigmaS() const { return _sigmaS; }
+    // Checkerboard
+    double inline GetSourceMagnitude() const { return _magQ; }
+    // CSD
+    double inline GetMaxEnergyCSD() const { return _maxEnergyCSD; }
+    // Lattice
+    double inline GetLatticeAbsBlue() const { return _dsgnAbsBlue; }
+    double inline GetLatticeScatterWhite() const { return _dsgnScatterWhite; }
+    std::vector<double> inline GetLatticeAbsorptionIndividual() const { return _dsgnAbsIndividual; }
+    unsigned short inline GetNLatticeAbsIndividual() { return _nDsgnAbsIndividual; }
+    std::vector<double> inline GetLatticeScatterIndividual() const { return _dsgnScatterIndividual; }
+    unsigned short inline GetNLatticeScatterIndividual() const { return _nDsgnScatterIndividual; }
+    // Hohlraum
+    unsigned short inline GetNumProbingCellsLineHohlraum() const { return _nProbingCellsLineGreenHohlraum; }
+    double inline GetPosXCenterGreenHohlraum() const { return _posCenterXHohlraum; }
+    double inline GetPosYCenterGreenHohlraum() const { return _posCenterYHohlraum; }
+    double inline GetPosRedRightTopHohlraum() const { return _posRedRightTop; }
+    double inline GetPosRedRightBottomHohlraum() const { return _posRedRightBottom; }
+    double inline GetPosRedLeftTopHohlraum() const { return _posRedLeftTop; }
+    double inline GetPosRedLeftBottomHohlraum() const { return _posRedLeftBottom; }
+    double inline GetPosRedLeftBorderHohlraum() const { return _posRedLeftBorder; }
+    double inline GetPosRedRightBorderHohlraum() const { return _posRedRightBorder; }
+
+    // Plume radiation
+    PLUME_BACKEND_NAME inline GetPlumeBackend() const { return _plumeBackend; }
+    std::string inline GetPlumeFieldFile() const { return std::filesystem::path( _plumeFieldFile ).lexically_normal(); }
+    bool inline GetPlumeSyntheticField() const { return _plumeSyntheticField; }
+    bool inline GetPlumeNozzleShadow() const { return _plumeNozzleShadow; }
+    bool inline GetPlumeWriteVTK() const { return _plumeWriteVTK; }
+    double inline GetPlumeBaseZ() const { return _plumeBaseZ; }
+    double inline GetPlumeBaseRadius() const { return _plumeBaseRadius; }
+    unsigned long inline GetPlumeBaseSamples() const { return _plumeBaseSamples; }
+    unsigned long inline GetPlumeRayPolarSamples() const { return _plumeRayPolarSamples; }
+    unsigned long inline GetPlumeRayAzimuthSamples() const { return _plumeRayAzimuthSamples; }
+    double inline GetPlumeRayStep() const { return _plumeRayStep; }
+    double inline GetPlumeRayMaxDistance() const { return _plumeRayMaxDistance; }
+    double inline GetPlumeIncomingIntensity() const { return _plumeIncomingIntensity; }
+    double inline GetPlumeNozzleRadius() const { return _plumeNozzleRadius; }
+    double inline GetPlumeNozzleLength() const { return _plumeNozzleLength; }
+    double inline GetPlumeSyntheticTemperature() const { return _plumeSyntheticTemperature; }
+    double inline GetPlumeSyntheticKappa() const { return _plumeSyntheticKappa; }
+    double inline GetPlumeSyntheticZMax() const { return _plumeSyntheticZMax; }
+    double inline GetPlumeSyntheticRMax() const { return _plumeSyntheticRMax; }
+    unsigned long inline GetPlumeSyntheticZCells() const { return _plumeSyntheticZCells; }
+    unsigned long inline GetPlumeSyntheticRCells() const { return _plumeSyntheticRCells; }
+
+    //  Optimizer
+    double inline GetNewtonOptimizerEpsilon() const { return _optimizerEpsilon; }
+    unsigned long inline GetNewtonIter() const { return _newtonIter; }
+    double inline GetNewtonStepSize() const { return _newtonStepSize; }
+    unsigned long inline GetNewtonMaxLineSearches() const { return _newtonLineSearchIter; }
+    bool inline GetNewtonFastMode() const { return _newtonFastMode; }
+    OPTIMIZER_NAME inline GetOptimizerName() const { return _entropyOptimizerName; }
+    double inline GetRegularizerGamma() const { return _regularizerGamma; }
+    double inline GetEntropyDynamicAnsatz() const { return _entropyDynamicClosure; }
+
+    // Neural Closure
+    unsigned short inline GetModelMK() const { return _neuralModel; }
+    unsigned short inline GetNeuralModelGamma() const { return _neuralGamma; }
+    bool inline GetEnforceNeuralRotationalSymmetry() const { return _enforceNeuralRotationalSymmetry; }
+
+    // Boundary Conditions
+    BOUNDARY_TYPE GetBoundaryType( std::string nameMarker ) const; /*!< @brief Get Boundary Type of given marker */
+
+    // Scattering Kernel
+    KERNEL_NAME inline GetKernelName() const { return _kernelName; }
+
+    // Basis name
+    SPHERICAL_BASIS_NAME inline GetSphericalBasisName() const { return _sphericalBasisName; }
+    // Output Structure
+    std::vector<VOLUME_OUTPUT> inline GetVolumeOutput() const { return _volumeOutput; }
+    unsigned short inline GetNVolumeOutput() const { return _nVolumeOutput; }
+    unsigned short inline GetVolumeOutputFrequency() const { return _volumeOutputFrequency; }
+
+    std::vector<SCALAR_OUTPUT> inline GetScreenOutput() const { return _screenOutput; }
+    unsigned short inline GetNScreenOutput() const { return _nScreenOutput; }
+    unsigned short inline GetScreenOutputFrequency() const { return _screenOutputFrequency; }
+
+    std::vector<SCALAR_OUTPUT> inline GetHistoryOutput() const { return _historyOutput; }
+    unsigned short inline GetNHistoryOutput() const { return _nHistoryOutput; }
+    unsigned short inline GetHistoryOutputFrequency() const { return _historyOutputFrequency; }
+
+    // Data generator
+    bool inline GetDataGeneratorMode() const { return _dataGeneratorMode; }
+    SAMPLER_NAME inline GetSamplerName() const { return _sampler; }
+    unsigned long inline GetTrainingDataSetSize() const { return _tainingSetSize; }
+    bool inline GetSizeByDimension() const { return _sizeByDimension; }
+    unsigned long inline GetMaxValFirstMoment() const { return _maxValFirstMoment; }    // Deprecated
+    double GetRealizableSetEpsilonU0() const { return _RealizableSetEpsilonU0; }
+    double GetRealizableSetEpsilonU1() const { return _RealizableSetEpsilonU1; }
+    bool inline GetNormalizedSampling() const { return _normalizedSampling; }
+    bool inline GetAlphaSampling() const { return _alphaSampling; }
+    bool inline GetUniformSamlping() const { return _sampleUniform; }
+    double inline GetAlphaSamplingBound() const { return _alphaBound; }
+    double inline GetMinimalEVBound() const { return _minEVAlphaSampling; }
+    // double inline GetMinimalSamplingVelocity() { return _minSamplingVelocity; }
+    double inline GetMaximalSamplingVelocity() const { return _maxSamplingVelocity; }
+    double inline GetMinimalSamplingTemperature() const { return _minSamplingTemperature; }
+    double inline GetMaximalSamplingTemperature() const { return _maxSamplingTemperature; }
+    unsigned short inline GetNSamplingTemperatures() const { return _nTemperatures; }
+    bool inline GetIsMomentSolver() const { return _isMomentSolver; }
+    unsigned short inline GetTemporalOrder() const { return _rungeKuttaStages; }
+
+    // ---- Setters for option structure
+    // This section is dangerous
+    // Quadrature Structure
+    void inline SetNQuadPoints( unsigned nq ) { _nQuadPoints = nq; } /*!< @brief Never change the nq! This is only for the test framework. */
+    void inline SetQuadName( QUAD_NAME quadName ) {
+        _quadName = quadName;
+    } /*!< @brief Never change the quadName! This is only for the test framework. */
+    void inline SetQuadOrder( unsigned quadOrder ) {
+        _quadOrder = quadOrder;
+    } /*!< @brief Never change the quadOrder! This is only for the test framework. */
+    void inline SetSNAllGaussPts( bool useall ) { _allGaussPts = useall; } /*!< @brief Never change the this! This is only for the test framework. */
+    // Mesh Structure
+    void inline SetNCells( unsigned nCells ) { _nCells = nCells; }
+    void inline SetEnforceNeuralRotationalSymmetry( bool symmetryEnforce ) { _enforceNeuralRotationalSymmetry = symmetryEnforce; }
+    void inline SetForcedConnectivity( bool connectivityEnforce ) { _forcedConnectivityWrite = connectivityEnforce; }
+};
+
+#endif    // CONFIG_H
