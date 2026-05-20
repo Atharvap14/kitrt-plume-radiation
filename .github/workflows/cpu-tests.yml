@@ -36,7 +36,7 @@ jobs:
       - name: Configure CPU build
         run: |
           cmake -G Ninja -S . -B build_cpu \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_CUDA_HPC=OFF \
             -DBUILD_HIP_HPC=OFF \
             -DBUILD_MPI=OFF \
@@ -49,4 +49,11 @@ jobs:
         run: cmake --build build_cpu --parallel 2
 
       - name: Run tests
-        run: ctest --test-dir build_cpu --output-on-failure
+        run: |
+          while true; do
+            echo "CTest still running at $(date -u +%H:%M:%S)"
+            sleep 60
+          done &
+          heartbeat=$!
+          trap 'kill "${heartbeat}"' EXIT
+          ctest --test-dir build_cpu --output-on-failure --timeout 900
