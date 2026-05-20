@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -880,12 +881,13 @@ TEST_CASE( "Data Generator Classification", "[dataGen]" ) {
     // --- Read and validate logger ---
     std::ifstream historyLoggerReferenceStream( historyLoggerReference );
     std::ifstream historyLoggerStream( historyLogger );
+    REQUIRE( historyLoggerReferenceStream.is_open() );
+    REQUIRE( historyLoggerStream.is_open() );
 
     std::string line, lineRef;
-    bool lineValid;
     const char delimHist = ',';
 
-    bool testPassed = true;
+    std::vector<double> quadratureWeights;
     // --- History Logger
     unsigned count = 0;
     while( !historyLoggerReferenceStream.eof() && !historyLoggerStream.eof() && count < 3 ) {
@@ -897,28 +899,44 @@ TEST_CASE( "Data Generator Classification", "[dataGen]" ) {
         tokenize( line, delimHist, out );
         tokenize( lineRef, delimHist, outRef );
 
-        if( out.size() != outRef.size() ) {
-            std::cout << out.size() << "here\n";
-            std::cout << outRef.size() << "here\n";
-            std::cout << "here\n";
-            std::cout << lineRef << "\n" << line << "\n";
-            std::cout << "here\n";
-            std::cout << historyLoggerReference;
-            testPassed = false;
-            break;
-        }
+        INFO( "Data generator classification CSV row " << count );
+        REQUIRE( out.size() == outRef.size() );
+        REQUIRE( out.size() > 1 );
 
-        for( unsigned idx_token = 1; idx_token < out.size(); idx_token++ ) {    // Skip date  ==> start from 1
-            lineValid = outRef[idx_token].compare( out[idx_token] ) == 0;
-            if( !lineValid ) {
-                std::cout << lineRef << "\n" << line << "\n";
-                testPassed = false;
-                break;
+        if( count < 2 ) {
+            for( unsigned idx_token = 1; idx_token < out.size(); idx_token++ ) {    // Skip date  ==> start from 1
+                REQUIRE( outRef[idx_token].compare( out[idx_token] ) == 0 );
             }
         }
+        else {
+            // The classifier samples from std::normal_distribution, whose exact
+            // sequence is not portable across standard library implementations.
+            REQUIRE( quadratureWeights.size() + 1 == out.size() );
+
+            double weightedMass = 0.0;
+            double maxDensity   = 0.0;
+            for( unsigned idx_token = 1; idx_token < out.size(); idx_token++ ) {    // Skip date  ==> start from 1
+                double density = 0.0;
+                REQUIRE( parseTokenAsDouble( out[idx_token], density ) );
+                REQUIRE( std::isfinite( density ) );
+                REQUIRE( density >= 0.0 );
+                weightedMass += quadratureWeights[idx_token - 1] * density;
+                maxDensity = std::max( maxDensity, density );
+            }
+            REQUIRE( std::fabs( weightedMass - 1.0 ) < 1e-8 );
+            REQUIRE( maxDensity > 0.0 );
+        }
+
+        if( count == 1 ) {
+            quadratureWeights.resize( out.size() - 1 );
+            for( unsigned idx_token = 1; idx_token < out.size(); idx_token++ ) {    // Skip date  ==> start from 1
+                REQUIRE( parseTokenAsDouble( out[idx_token], quadratureWeights[idx_token - 1] ) );
+            }
+        }
+
         count++;
     }
-    REQUIRE( testPassed );
+    REQUIRE( count == 3 );
 
     delete datagen;
     delete config;

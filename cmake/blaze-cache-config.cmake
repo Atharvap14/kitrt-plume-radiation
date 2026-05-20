@@ -42,30 +42,40 @@ if (APPLE)
         OUTPUT_VARIABLE tmp
         RESULT_VARIABLE flag
         ERROR_QUIET)
-    if (flag)
+    string(STRIP "${tmp}" tmp)
+    if (flag OR NOT tmp MATCHES "^[0-9]+$")
         execute_process(COMMAND sysctl -n hw.l2cachesize
             OUTPUT_VARIABLE tmp
             RESULT_VARIABLE flag
             ERROR_QUIET)
-    endif (flag)
-    if (flag)
+        string(STRIP "${tmp}" tmp)
+    endif ()
+    if (flag OR NOT tmp MATCHES "^[0-9]+$")
         execute_process(COMMAND sysctl -n hw.l1icachesize
             OUTPUT_VARIABLE tmp
             RESULT_VARIABLE flag
             ERROR_QUIET)
-    endif (flag)
+        string(STRIP "${tmp}" tmp)
+    endif ()
 
-    if (flag EQUAL 0)
-        math(EXPR tmp ${tmp}/1024)  # If successful convert to kibibytes to comply with rest
-    endif (flag EQUAL 0)
+    if (flag EQUAL 0 AND tmp MATCHES "^[0-9]+$")
+        math(EXPR tmp "${tmp}/1024")  # If successful convert to kibibytes to comply with rest
+    else ()
+        set(flag 1)
+    endif ()
 endif (APPLE)
+
+string(STRIP "${tmp}" tmp)
+if (NOT tmp MATCHES "[0-9]+")
+    set(flag 1)
+endif ()
 
 if (flag)
     message(WARNING "Cache size not found automatically. Using default value as cache size.")
     set(tmp "3072")
 endif (flag)
 
-string( REGEX MATCH "([0-9][0-9]+)" tmp ${tmp} )
-math( EXPR BLAZE_CACHE_SIZE ${tmp}*1024 )
+string( REGEX MATCH "([0-9][0-9]+)" tmp "${tmp}" )
+math( EXPR BLAZE_CACHE_SIZE "${tmp}*1024" )
 add_compile_definitions( BLAZE_CACHE_SIZE=${BLAZE_CACHE_SIZE}UL )
 message( STATUS "Blaze: Automatic Cache Size Configuration = ${BLAZE_CACHE_SIZE} KiB" )

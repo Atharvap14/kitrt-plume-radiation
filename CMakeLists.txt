@@ -109,6 +109,17 @@ if( BLAS_FOUND )
     message( STATUS "Blaze: BLAS mode enabled" )
     add_compile_definitions( BLAZE_BLAS_MODE=1 )
     include_directories( ${BLAS_INCLUDE_DIR} )
+    if( APPLE AND BLAS_LIBRARIES MATCHES "Accelerate" )
+        execute_process( COMMAND xcrun --show-sdk-path
+                         OUTPUT_VARIABLE MACOS_SDK_PATH
+                         OUTPUT_STRIP_TRAILING_WHITESPACE )
+        set( ACCELERATE_VECLIB_INCLUDE_DIR
+             "${MACOS_SDK_PATH}/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers" )
+        if( EXISTS "${ACCELERATE_VECLIB_INCLUDE_DIR}/cblas.h" )
+            include_directories( ${ACCELERATE_VECLIB_INCLUDE_DIR} )
+            message( STATUS "Blaze: Apple Accelerate cblas.h found" )
+        endif()
+    endif()
 else()
     message( STATUS "Blaze: BLAS mode disabled" )
     add_compile_definitions( BLAZE_BLAS_MODE=0 )
@@ -119,12 +130,17 @@ include_directories( ${CMAKE_SOURCE_DIR}/ext/blaze )
 include_directories( ${CMAKE_SOURCE_DIR}/ext/cpptoml/include )
 include_directories( ${CMAKE_SOURCE_DIR}/ext/spdlog/include )
 
+set( KITRT_FILESYSTEM_LIBRARY "" )
+if( CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9 )
+    set( KITRT_FILESYSTEM_LIBRARY stdc++fs )
+endif()
+
 if( BUILD_MPI )
-    set( CORE_LIBRARIES ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MPI_LIBRARIES} ${VTK_LIBRARIES} OpenMP::OpenMP_CXX -lstdc++fs )
+    set( CORE_LIBRARIES ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MPI_LIBRARIES} ${VTK_LIBRARIES} OpenMP::OpenMP_CXX ${KITRT_FILESYSTEM_LIBRARY} )
     message( STATUS "MPI: Libraries loaded" )
 
 else()
-    set( CORE_LIBRARIES ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}  ${VTK_LIBRARIES} OpenMP::OpenMP_CXX -lstdc++fs )
+    set( CORE_LIBRARIES ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}  ${VTK_LIBRARIES} OpenMP::OpenMP_CXX ${KITRT_FILESYSTEM_LIBRARY} )
 endif()
 
 if( BUILD_CUDA_HPC )
