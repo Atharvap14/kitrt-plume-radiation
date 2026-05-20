@@ -598,6 +598,7 @@ void Config::SetPostprocessing() {
             std::string msg = "Chosen spatial dimension not supported for this Quadrature.\nChosen spatial dimension " + std::to_string( _dim ) + ".";
             ErrorMessages::Error( msg, CURRENT_FUNCTION );
         }
+        _nQuadPoints = quad->GetNq();
         delete quad;
     }
 
