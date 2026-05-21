@@ -52,6 +52,18 @@ Most Useful Validation Sources
      matched the shipped LBL reference with max relative error 2.56e-3 and mean
      relative error 9.22e-4.
 
+     To compare speed/fidelity for Planck mean, WSGG, and RCSLW group counts
+     across the S1 and S2 LBL references:
+
+     .. code-block:: bash
+
+        python tools/python/benchmark_radlib_methods.py --radlib-root /path/to/radlib
+
+     In the initial benchmark, S2 converged to max relative flux error around
+     2.5e-3 with RCSLW-24/25, while S1 plateaued around 1.6e-1 even with more
+     groups. That S1 behavior indicates spectral-model/reference-state bias,
+     not Monte Carlo noise or an insufficient ray count.
+
 3. RADIS
 
    * Code: https://github.com/radis/radis

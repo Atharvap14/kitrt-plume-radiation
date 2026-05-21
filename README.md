@@ -40,6 +40,12 @@ against RadLib's shipped line-by-line reference data with:
 python tools/python/validate_radlib_flux.py --case ex_S2 --radlib-root /path/to/radlib
 ```
 
+Run the RadLib method speed/fidelity sweep:
+
+```bash
+python tools/python/benchmark_radlib_methods.py --radlib-root /path/to/radlib
+```
+
 
 
 ## Key Features
