@@ -5,10 +5,11 @@ RADIS/HITEMP line-by-line spectra are the highest-fidelity validation target
 for plume-relevant gases, but full plume-sized LBL runs are too expensive for
 routine development. This utility creates deliberately small homogeneous
 gas-cell fixtures, then compares the LBL result with simple Planck-weighted
-band-gray reductions. It also exports a KiT-RT spectral quadrature table that
-the C++ plume gas-cell validator can march independently. The output is meant
-to screen non-gray property handling before wiring a model into the plume
-solver.
+band-gray reductions, including adaptive bins that recursively split the
+spectral interval where the current binned model has the largest LBL radiance
+error. It also exports a KiT-RT spectral quadrature table that the C++ plume
+gas-cell validator can march independently. The output is meant to screen
+non-gray property handling before wiring a model into the plume solver.
 """
 
 from __future__ import annotations
@@ -41,6 +42,14 @@ class GasCellCase:
     mole_fraction: float
     path_length_cm: float
     note: str
+
+
+@dataclass(frozen=True)
+class BinnedModel:
+    kappa_cm_1: np.ndarray
+    transmittance: np.ndarray
+    radiance_mw_cm2_sr_cm_1: np.ndarray
+    bins: List[Tuple[int, int]]
 
 
 CASES: Dict[str, GasCellCase] = {
@@ -170,10 +179,11 @@ def build_group_model(
     temperature_K: float,
     path_length_cm: float,
     groups: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> BinnedModel:
     blackbody = planck_radiance_wavenumber(wn_cm_1, temperature_K)
     edges = np.linspace(float(wn_cm_1[0]), float(wn_cm_1[-1]), groups + 1)
     kappa_group = np.zeros_like(wn_cm_1)
+    bins: List[Tuple[int, int]] = []
 
     for idx in range(groups):
         if idx == groups - 1:
@@ -182,16 +192,155 @@ def build_group_model(
             mask = (wn_cm_1 >= edges[idx]) & (wn_cm_1 < edges[idx + 1])
         if not np.any(mask):
             continue
-        denom = float(np.trapezoid(blackbody[mask], wn_cm_1[mask]))
-        if abs(denom) <= 1.0e-300:
-            kappa = float(np.mean(abscoeff_cm_1[mask]))
-        else:
-            kappa = float(np.trapezoid(abscoeff_cm_1[mask] * blackbody[mask], wn_cm_1[mask]) / denom)
+        indices = np.flatnonzero(mask)
+        bins.append((int(indices[0]), int(indices[-1]) + 1))
+        kappa = planck_weighted_bin_kappa(abscoeff_cm_1, blackbody, trapezoid_weights(wn_cm_1), int(indices[0]), int(indices[-1]) + 1)
         kappa_group[mask] = max(kappa, 0.0)
 
     transmittance = np.exp(-kappa_group * path_length_cm)
     radiance = blackbody * (1.0 - transmittance)
-    return kappa_group, transmittance, radiance
+    return BinnedModel(kappa_group, transmittance, radiance, bins)
+
+
+def planck_weighted_bin_kappa(
+    abscoeff_cm_1: np.ndarray,
+    blackbody: np.ndarray,
+    weights: np.ndarray,
+    start: int,
+    stop: int,
+) -> float:
+    denom = float(np.sum(blackbody[start:stop] * weights[start:stop]))
+    if abs(denom) <= 1.0e-300:
+        return float(np.mean(abscoeff_cm_1[start:stop]))
+    return float(np.sum(abscoeff_cm_1[start:stop] * blackbody[start:stop] * weights[start:stop]) / denom)
+
+
+def bin_error(
+    abscoeff_cm_1: np.ndarray,
+    blackbody: np.ndarray,
+    weights: np.ndarray,
+    rad_lbl: np.ndarray,
+    path_length_cm: float,
+    start: int,
+    stop: int,
+) -> float:
+    kappa = planck_weighted_bin_kappa(abscoeff_cm_1, blackbody, weights, start, stop)
+    radiance = blackbody[start:stop] * (1.0 - np.exp(-kappa * path_length_cm))
+    diff = radiance - rad_lbl[start:stop]
+    return float(np.sum(diff * diff * weights[start:stop]))
+
+
+def best_adaptive_split(
+    abscoeff_cm_1: np.ndarray,
+    blackbody: np.ndarray,
+    weights: np.ndarray,
+    rad_lbl: np.ndarray,
+    path_length_cm: float,
+    start: int,
+    stop: int,
+) -> Tuple[float, int]:
+    if stop - start < 2:
+        return 0.0, -1
+
+    current = bin_error(abscoeff_cm_1, blackbody, weights, rad_lbl, path_length_cm, start, stop)
+    best_gain = -1.0
+    best_split = -1
+    for split in range(start + 1, stop):
+        left = bin_error(abscoeff_cm_1, blackbody, weights, rad_lbl, path_length_cm, start, split)
+        right = bin_error(abscoeff_cm_1, blackbody, weights, rad_lbl, path_length_cm, split, stop)
+        gain = current - left - right
+        if gain > best_gain:
+            best_gain = gain
+            best_split = split
+    return best_gain, best_split
+
+
+def build_adaptive_group_model(
+    wn_cm_1: np.ndarray,
+    abscoeff_cm_1: np.ndarray,
+    rad_lbl: np.ndarray,
+    temperature_K: float,
+    path_length_cm: float,
+    groups: int,
+) -> BinnedModel:
+    blackbody = planck_radiance_wavenumber(wn_cm_1, temperature_K)
+    weights = trapezoid_weights(wn_cm_1)
+    target_groups = max(1, min(groups, len(wn_cm_1)))
+    bins: List[Tuple[int, int]] = [(0, len(wn_cm_1))]
+
+    while len(bins) < target_groups:
+        split_choice: Tuple[float, int, int] = (-1.0, -1, -1)
+        for idx, (start, stop) in enumerate(bins):
+            gain, split = best_adaptive_split(abscoeff_cm_1, blackbody, weights, rad_lbl, path_length_cm, start, stop)
+            if split > start and split < stop and gain > split_choice[0]:
+                split_choice = (gain, idx, split)
+        if split_choice[1] < 0:
+            break
+        _, bin_idx, split = split_choice
+        start, stop = bins[bin_idx]
+        bins[bin_idx : bin_idx + 1] = [(start, split), (split, stop)]
+
+    bins.sort(key=lambda item: item[0])
+    kappa_group = np.zeros_like(wn_cm_1)
+    for start, stop in bins:
+        kappa_group[start:stop] = max(planck_weighted_bin_kappa(abscoeff_cm_1, blackbody, weights, start, stop), 0.0)
+
+    transmittance = np.exp(-kappa_group * path_length_cm)
+    radiance = blackbody * (1.0 - transmittance)
+    return BinnedModel(kappa_group, transmittance, radiance, bins)
+
+
+def write_binned_kitrt_groups_csv(
+    path: Path,
+    case: GasCellCase,
+    databank: str,
+    model_name: str,
+    binned_model: BinnedModel,
+    wn_cm_1: np.ndarray,
+    temperature_K: float,
+    path_length_cm: float,
+    gt_flux_w_m2: float,
+) -> None:
+    blackbody = planck_radiance_wavenumber(wn_cm_1, temperature_K)
+    weights = trapezoid_weights(wn_cm_1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "case",
+                "species",
+                "databank",
+                "model",
+                "group",
+                "wavenumber_min_cm_1",
+                "wavenumber_max_cm_1",
+                "points",
+                "kappa_1_per_m",
+                "source_radiance_W_m2_sr",
+                "path_length_m",
+                "gt_flux_W_m2",
+            ]
+        )
+        for group_idx, (start, stop) in enumerate(binned_model.bins):
+            source_radiance = float(np.sum(blackbody[start:stop] * weights[start:stop]) * 10.0)
+            kappa_1_per_m = float(binned_model.kappa_cm_1[start] * 100.0)
+            writer.writerow(
+                [
+                    case.name,
+                    case.species,
+                    databank,
+                    model_name,
+                    group_idx,
+                    f"{wn_cm_1[start]:.17g}",
+                    f"{wn_cm_1[stop - 1]:.17g}",
+                    stop - start,
+                    f"{kappa_1_per_m:.17g}",
+                    f"{source_radiance:.17g}",
+                    f"{path_length_cm * 0.01:.17g}",
+                    f"{gt_flux_w_m2:.17g}",
+                ]
+            )
 
 
 def require_radis() -> object:
@@ -244,9 +393,10 @@ def write_outputs(
     databank: str,
     elapsed_s: float,
     groups: Sequence[int],
+    adaptive_groups: Sequence[int],
     spectrum: object,
     out_dir: Path,
-) -> Tuple[Path, Path, Path, Path]:
+) -> Tuple[Path, Path, Path, Path, List[Path]]:
     wn, trans_lbl = spectrum.get("transmittance_noslit")
     _, rad_lbl = spectrum.get("radiance_noslit")
     _, abscoeff = spectrum.get("abscoeff")
@@ -258,6 +408,10 @@ def write_outputs(
     models = {
         count: build_group_model(wn, abscoeff, case.temperature_K, case.path_length_cm, count)
         for count in groups
+    }
+    adaptive_models = {
+        count: build_adaptive_group_model(wn, abscoeff, rad_lbl, case.temperature_K, case.path_length_cm, count)
+        for count in adaptive_groups
     }
     kitrt_kappa_1_per_m, kitrt_source_w_m2_sr, kitrt_emitted_w_m2_sr = build_kitrt_groups(
         wn,
@@ -289,13 +443,39 @@ def write_outputs(
         )
         for idx, value in enumerate(wn):
             writer.writerow([case.name, databank, "RADIS-LBL-GT", 0, value, abscoeff[idx], trans_lbl[idx], rad_lbl[idx]])
-        for count, (_, trans_model, rad_model) in models.items():
+        for count, model in models.items():
             for idx, value in enumerate(wn):
-                writer.writerow([case.name, databank, "Planck-band-gray", count, value, "", trans_model[idx], rad_model[idx]])
+                writer.writerow(
+                    [
+                        case.name,
+                        databank,
+                        "Planck-band-gray",
+                        count,
+                        value,
+                        "",
+                        model.transmittance[idx],
+                        model.radiance_mw_cm2_sr_cm_1[idx],
+                    ]
+                )
+        for count, model in adaptive_models.items():
+            for idx, value in enumerate(wn):
+                writer.writerow(
+                    [
+                        case.name,
+                        databank,
+                        "Adaptive-band-gray",
+                        count,
+                        value,
+                        "",
+                        model.transmittance[idx],
+                        model.radiance_mw_cm2_sr_cm_1[idx],
+                    ]
+                )
 
     gt_flux = integrated_flux_w_m2(wn, rad_lbl)
     kitrt_flux = spectral_groups_flux_w_m2(kitrt_emitted_w_m2_sr)
     kitrt_rel_error = abs(kitrt_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
+    binned_group_paths: List[Path] = []
 
     with kitrt_groups_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -392,8 +572,8 @@ def write_outputs(
                 f"{float(np.max(abscoeff)):.12g}",
             ]
         )
-        for count, (kappa_group, trans_model, rad_model) in models.items():
-            model_flux = integrated_flux_w_m2(wn, rad_model)
+        for count, model in models.items():
+            model_flux = integrated_flux_w_m2(wn, model.radiance_mw_cm2_sr_cm_1)
             rel_error = abs(model_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
             writer.writerow(
                 [
@@ -408,16 +588,54 @@ def write_outputs(
                     case.pressure_bar,
                     case.mole_fraction,
                     case.path_length_cm,
-                    f"{float(np.trapezoid(rad_model, wn)):.12g}",
+                    f"{float(np.trapezoid(model.radiance_mw_cm2_sr_cm_1, wn)):.12g}",
                     f"{model_flux:.12g}",
                     f"{rel_error:.12g}",
-                    f"{float(np.mean(trans_model)):.12g}",
-                    f"{float(np.max(kappa_group)):.12g}",
+                    f"{float(np.mean(model.transmittance)):.12g}",
+                    f"{float(np.max(model.kappa_cm_1)):.12g}",
+                ]
+            )
+        for count, model in adaptive_models.items():
+            model_flux = integrated_flux_w_m2(wn, model.radiance_mw_cm2_sr_cm_1)
+            rel_error = abs(model_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
+            writer.writerow(
+                [
+                    case.name,
+                    case.species,
+                    databank,
+                    "Adaptive-band-gray",
+                    count,
+                    f"{elapsed_s:.6g}",
+                    len(wn),
+                    case.temperature_K,
+                    case.pressure_bar,
+                    case.mole_fraction,
+                    case.path_length_cm,
+                    f"{float(np.trapezoid(model.radiance_mw_cm2_sr_cm_1, wn)):.12g}",
+                    f"{model_flux:.12g}",
+                    f"{rel_error:.12g}",
+                    f"{float(np.mean(model.transmittance)):.12g}",
+                    f"{float(np.max(model.kappa_cm_1)):.12g}",
                 ]
             )
 
-    render_plot(plot_png, case, databank, wn, trans_lbl, rad_lbl, models, gt_flux, kitrt_flux)
-    return spectral_csv, kitrt_groups_csv, summary_csv, plot_png
+    for count, model in adaptive_models.items():
+        adaptive_path = prefix.with_name(prefix.name + f"_adaptive_{count}_kitrt_groups.csv")
+        write_binned_kitrt_groups_csv(
+            adaptive_path,
+            case,
+            databank,
+            f"Adaptive-band-gray-{count}",
+            model,
+            wn,
+            case.temperature_K,
+            case.path_length_cm,
+            gt_flux,
+        )
+        binned_group_paths.append(adaptive_path)
+
+    render_plot(plot_png, case, databank, wn, trans_lbl, rad_lbl, models, adaptive_models, gt_flux, kitrt_flux)
+    return spectral_csv, kitrt_groups_csv, summary_csv, plot_png, binned_group_paths
 
 
 def render_plot(
@@ -427,25 +645,33 @@ def render_plot(
     wn: np.ndarray,
     trans_lbl: np.ndarray,
     rad_lbl: np.ndarray,
-    models: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    models: Dict[int, BinnedModel],
+    adaptive_models: Dict[int, BinnedModel],
     gt_flux: float,
     kitrt_flux: float,
 ) -> None:
     import matplotlib.pyplot as plt
 
-    colors = ["#d55e00", "#0072b2", "#009e73", "#cc79a7", "#f0e442", "#56b4e9"]
+    colors = ["#d55e00", "#0072b2", "#009e73", "#cc79a7", "#f0e442", "#56b4e9", "#332288", "#88ccee"]
     fig, axes = plt.subplots(2, 1, figsize=(15, 10), sharex=True)
 
     axes[0].plot(wn, rad_lbl, color="#111827", linewidth=2.2, label="GT RADIS LBL")
     axes[1].plot(wn, trans_lbl, color="#111827", linewidth=2.2, label="GT RADIS LBL")
 
-    for idx, (count, (_, trans_model, rad_model)) in enumerate(models.items()):
+    for idx, (count, model) in enumerate(models.items()):
         color = colors[idx % len(colors)]
-        model_flux = integrated_flux_w_m2(wn, rad_model)
+        model_flux = integrated_flux_w_m2(wn, model.radiance_mw_cm2_sr_cm_1)
         rel_error = abs(model_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
         label = f"Planck-band-gray-{count} (flux err {rel_error:.2e})"
-        axes[0].plot(wn, rad_model, color=color, linewidth=1.7, linestyle="--", label=label)
-        axes[1].plot(wn, trans_model, color=color, linewidth=1.7, linestyle="--", label=f"Planck-band-gray-{count}")
+        axes[0].plot(wn, model.radiance_mw_cm2_sr_cm_1, color=color, linewidth=1.4, linestyle="--", label=label)
+        axes[1].plot(wn, model.transmittance, color=color, linewidth=1.4, linestyle="--", label=f"Planck-band-gray-{count}")
+    for idx, (count, model) in enumerate(adaptive_models.items()):
+        color = colors[(idx + len(models)) % len(colors)]
+        model_flux = integrated_flux_w_m2(wn, model.radiance_mw_cm2_sr_cm_1)
+        rel_error = abs(model_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
+        label = f"Adaptive-band-gray-{count} (flux err {rel_error:.2e})"
+        axes[0].plot(wn, model.radiance_mw_cm2_sr_cm_1, color=color, linewidth=1.7, linestyle="-.", label=label)
+        axes[1].plot(wn, model.transmittance, color=color, linewidth=1.7, linestyle="-.", label=f"Adaptive-band-gray-{count}")
 
     title = f"RADIS {databank.upper()} {case.species} Gas Cell: GT vs Group Models"
     subtitle = (
@@ -493,6 +719,7 @@ def main() -> int:
     parser.add_argument("--case", default="co2_hot_2300", help="Case name, comma-separated names, or 'all'")
     parser.add_argument("--databank", default="hitemp", choices=["hitemp", "hitran"], help="RADIS line database")
     parser.add_argument("--groups", default="1,4,8,16", help="Comma-separated band-gray group counts")
+    parser.add_argument("--adaptive-groups", default="8,16,32,64", help="Comma-separated adaptive band-gray group counts")
     parser.add_argument("--out-dir", type=Path, default=Path("tests/result"), help="Output directory")
     parser.add_argument("--timeout-s", type=int, default=180, help="Per-case RADIS timeout; <=0 disables")
     parser.add_argument("--allow-stored-hitran-credentials", action="store_true")
@@ -501,6 +728,7 @@ def main() -> int:
 
     check_hitemp_credentials(args)
     groups = parse_groups(args.groups)
+    adaptive_groups = parse_groups(args.adaptive_groups)
 
     for case in selected_cases(args.case):
         print(f"RADIS {args.databank.upper()} {case.name}: {case.note}", flush=True)
@@ -512,9 +740,19 @@ def main() -> int:
             print(f"  failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             print("  rerun with --verbose for the full RADIS traceback", file=sys.stderr, flush=True)
             return 1
-        spectral_csv, kitrt_groups_csv, summary_csv, plot_png = write_outputs(case, args.databank, elapsed_s, groups, spectrum, args.out_dir)
+        spectral_csv, kitrt_groups_csv, summary_csv, plot_png, binned_group_paths = write_outputs(
+            case,
+            args.databank,
+            elapsed_s,
+            groups,
+            adaptive_groups,
+            spectrum,
+            args.out_dir,
+        )
         print(f"  wrote {spectral_csv}", flush=True)
         print(f"  wrote {kitrt_groups_csv}", flush=True)
+        for binned_group_path in binned_group_paths:
+            print(f"  wrote {binned_group_path}", flush=True)
         print(f"  wrote {summary_csv}", flush=True)
         print(f"  wrote {plot_png}", flush=True)
 

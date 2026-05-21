@@ -104,14 +104,18 @@ Most Useful Validation Sources
      .. code-block:: bash
 
         python tools/python/generate_radis_lbl_fixture.py \
-          --case co2_hot_2300,co_hot_2100 --databank hitran
+          --case co2_hot_2300,co_hot_2100 --databank hitran \
+          --groups 1,4,8,16 --adaptive-groups 8,16,32,64
 
      The HITRAN mode writes RADIS LBL spectra, band-integrated hemispherical
      gas-cell fluxes, and PNG plots comparing the LBL curve against simple
-     Planck-weighted band-gray reductions. It also writes
+     Planck-weighted band-gray reductions and error-adaptive band-gray
+     reductions. The adaptive bins recursively split the spectral interval with
+     the largest remaining LBL radiance error, so multiple separated peaks and
+     troughs receive bins before smooth regions do. It also writes
      ``*_kitrt_groups.csv`` files: one quadrature group per RADIS wavenumber
-     point, with ``kappa_1_per_m`` and integrated Planck source radiance. The
-     KiT-RT spectral gas-cell validator reads this table and marches the same
+     point, plus compressed ``*_adaptive_*_kitrt_groups.csv`` tables. The
+     KiT-RT spectral gas-cell validator reads these tables and marches the same
      gray, non-scattering RTE independently:
 
      .. code-block:: bash
@@ -123,12 +127,19 @@ Most Useful Validation Sources
           --fixture tests/result/radis_co2_hot_2300_hitran_kitrt_groups.csv \
           --out tests/result/radis_co2_hot_2300_hitran_kitrt_flux.csv
 
+        tests/result/plume_spectral_gas_cell \
+          --fixture tests/result/radis_co2_hot_2300_hitran_adaptive_64_kitrt_groups.csv \
+          --out tests/result/radis_co2_hot_2300_hitran_adaptive_64_kitrt_flux.csv
+
      On the Apple M3 test machine the HITRAN smoke run completed for CO2 and
      CO. The KiT-RT spectral gas-cell march reproduced the RADIS integrated
      fluxes to about 2e-5 relative error for both cases. RADIS correctly warned
      that HITRAN is not valid high-temperature ground truth, so the same path
      should be rerun with HITEMP credentials before treating the numbers as
-     scientifically defensible plume-gas validation.
+     scientifically defensible plume-gas validation. In HITRAN smoke mode,
+     adaptive 64-bin compression reduced CO2 flux error to 2.4e-3 and CO flux
+     error to 2.5e-5, while uniform 16-bin Planck-gray stayed at 3.8e-2 and
+     9.3e-2 respectively.
 
 4. HITRAN HAPI
 
