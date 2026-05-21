@@ -66,6 +66,18 @@ HITRAN_EMAIL=you@example.com HITRAN_PASSWORD=... \
 python tools/python/generate_radis_lbl_fixture.py --case co2_hot_2300,co_hot_2100 --databank hitran
 ```
 
+Then run the KiT-RT spectral gas-cell RT validator on the generated LBL
+quadrature table:
+
+```bash
+clang++ -std=c++17 -Iinclude tools/cpp/plume_spectral_gas_cell.cpp \
+  -o tests/result/plume_spectral_gas_cell
+
+tests/result/plume_spectral_gas_cell \
+  --fixture tests/result/radis_co2_hot_2300_hitran_kitrt_groups.csv \
+  --out tests/result/radis_co2_hot_2300_hitran_kitrt_flux.csv
+```
+
 
 
 ## Key Features

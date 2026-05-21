@@ -1,6 +1,8 @@
 #ifndef PLUMEDTMSOLVER_H
 #define PLUMEDTMSOLVER_H
 
+#include "solvers/plumespectralgascell.hpp"
+
 #include <string>
 #include <vector>
 
@@ -25,6 +27,9 @@ class PlumeDTMSolver
         double heatFlux;
     };
 
+    using SpectralGroup        = PlumeSpectralGasCell::SpectralGroup;
+    using SpectralGasCellInput = PlumeSpectralGasCell::Fixture;
+
     explicit PlumeDTMSolver( Config* settings );
 
     void Solve();
@@ -32,6 +37,8 @@ class PlumeDTMSolver
 
     static double BlackbodyIntensity( double temperature );
     static double IntegrateHomogeneousRay( double length, double kappa, double temperature, double incomingIntensity = 0.0 );
+    static SpectralGasCellInput LoadSpectralGasCellCSV( const std::string& filename );
+    static double IntegrateSpectralGasCellFlux( const std::vector<SpectralGroup>& groups, double lengthM );
     static FieldData LoadFieldCSV( const std::string& filename );
     static FieldData MakeUniformField( double zMin,
                                        double zMax,

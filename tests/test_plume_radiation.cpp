@@ -23,6 +23,38 @@ TEST_CASE( "Plume homogeneous ray exact solution", "[plume]" ) {
     REQUIRE( PlumeDTMSolver::IntegrateHomogeneousRay( length, 0.0, temperature, 42.0 ) == Approx( 42.0 ) );
 }
 
+TEST_CASE( "Plume spectral gas-cell fixture reproduces grouped slab flux", "[plume]" ) {
+    const std::vector<PlumeDTMSolver::SpectralGroup> groups = {
+        { 20.0, 3.0 },
+        { 0.5, 0.75 },
+        { 0.0, 10.0 },
+    };
+    const double length = 0.01;
+    const double expectedFlux =
+        static_cast<double>( PI ) * ( 3.0 * ( 1.0 - std::exp( -20.0 * length ) ) + 0.75 * ( 1.0 - std::exp( -0.5 * length ) ) );
+
+    REQUIRE( PlumeDTMSolver::IntegrateSpectralGasCellFlux( groups, length ) == Approx( expectedFlux ).epsilon( 1e-12 ) );
+}
+
+TEST_CASE( "Plume spectral gas-cell CSV round trip", "[plume]" ) {
+    const std::string filename = std::string( TESTS_PATH ) + "result/plume_spectral_gas_cell.csv";
+    std::filesystem::create_directories( std::filesystem::path( filename ).parent_path() );
+
+    std::ofstream out( filename );
+    out << "case,group,kappa_1_per_m,source_radiance_W_m2_sr,path_length_m,gt_flux_W_m2\n";
+    out << "synthetic,0,2.0,4.0,0.5,7.0\n";
+    out << "synthetic,1,1.0,3.0,0.5,7.0\n";
+    out.close();
+
+    const auto fixture = PlumeDTMSolver::LoadSpectralGasCellCSV( filename );
+    REQUIRE( fixture.groups.size() == 2 );
+    REQUIRE( fixture.pathLengthM == Approx( 0.5 ) );
+    REQUIRE( fixture.gtFluxWm2 == Approx( 7.0 ) );
+
+    const double expectedFlux = static_cast<double>( PI ) * ( 4.0 * ( 1.0 - std::exp( -1.0 ) ) + 3.0 * ( 1.0 - std::exp( -0.5 ) ) );
+    REQUIRE( PlumeDTMSolver::IntegrateSpectralGasCellFlux( fixture.groups, fixture.pathLengthM ) == Approx( expectedFlux ).epsilon( 1e-12 ) );
+}
+
 TEST_CASE( "Plume synthetic field CSV round trip", "[plume]" ) {
     const std::string filename = std::string( TESTS_PATH ) + "result/plume_synthetic_field.csv";
     std::filesystem::create_directories( std::filesystem::path( filename ).parent_path() );

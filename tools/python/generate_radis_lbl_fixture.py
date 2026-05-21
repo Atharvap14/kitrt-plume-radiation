@@ -5,8 +5,10 @@ RADIS/HITEMP line-by-line spectra are the highest-fidelity validation target
 for plume-relevant gases, but full plume-sized LBL runs are too expensive for
 routine development. This utility creates deliberately small homogeneous
 gas-cell fixtures, then compares the LBL result with simple Planck-weighted
-band-gray reductions. The output is meant to screen non-gray property handling
-before wiring a model into the plume solver.
+band-gray reductions. It also exports a KiT-RT spectral quadrature table that
+the C++ plume gas-cell validator can march independently. The output is meant
+to screen non-gray property handling before wiring a model into the plume
+solver.
 """
 
 from __future__ import annotations
@@ -132,6 +134,36 @@ def integrated_flux_w_m2(wn_cm_1: np.ndarray, radiance_mw_cm2_sr_cm: np.ndarray)
     return math.pi * band_radiance * 10.0
 
 
+def trapezoid_weights(wn_cm_1: np.ndarray) -> np.ndarray:
+    if len(wn_cm_1) == 1:
+        return np.ones_like(wn_cm_1)
+    weights = np.empty_like(wn_cm_1)
+    weights[0] = 0.5 * (wn_cm_1[1] - wn_cm_1[0])
+    weights[-1] = 0.5 * (wn_cm_1[-1] - wn_cm_1[-2])
+    if len(wn_cm_1) > 2:
+        weights[1:-1] = 0.5 * (wn_cm_1[2:] - wn_cm_1[:-2])
+    return weights
+
+
+def build_kitrt_groups(
+    wn_cm_1: np.ndarray,
+    abscoeff_cm_1: np.ndarray,
+    temperature_K: float,
+    path_length_cm: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    blackbody = planck_radiance_wavenumber(wn_cm_1, temperature_K)
+    weights = trapezoid_weights(wn_cm_1)
+    kappa_1_per_m = abscoeff_cm_1 * 100.0
+    source_radiance_w_m2_sr = blackbody * weights * 10.0
+    transmittance = np.exp(-kappa_1_per_m * (path_length_cm * 0.01))
+    emitted_radiance_w_m2_sr = source_radiance_w_m2_sr * (1.0 - transmittance)
+    return kappa_1_per_m, source_radiance_w_m2_sr, emitted_radiance_w_m2_sr
+
+
+def spectral_groups_flux_w_m2(emitted_radiance_w_m2_sr: np.ndarray) -> float:
+    return math.pi * float(np.sum(emitted_radiance_w_m2_sr))
+
+
 def build_group_model(
     wn_cm_1: np.ndarray,
     abscoeff_cm_1: np.ndarray,
@@ -214,7 +246,7 @@ def write_outputs(
     groups: Sequence[int],
     spectrum: object,
     out_dir: Path,
-) -> Tuple[Path, Path, Path]:
+) -> Tuple[Path, Path, Path, Path]:
     wn, trans_lbl = spectrum.get("transmittance_noslit")
     _, rad_lbl = spectrum.get("radiance_noslit")
     _, abscoeff = spectrum.get("abscoeff")
@@ -227,10 +259,17 @@ def write_outputs(
         count: build_group_model(wn, abscoeff, case.temperature_K, case.path_length_cm, count)
         for count in groups
     }
+    kitrt_kappa_1_per_m, kitrt_source_w_m2_sr, kitrt_emitted_w_m2_sr = build_kitrt_groups(
+        wn,
+        abscoeff,
+        case.temperature_K,
+        case.path_length_cm,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = out_dir / f"radis_{case.name}_{databank.lower()}"
     spectral_csv = prefix.with_name(prefix.name + "_spectra.csv")
+    kitrt_groups_csv = prefix.with_name(prefix.name + "_kitrt_groups.csv")
     summary_csv = prefix.with_name(prefix.name + "_summary.csv")
     plot_png = prefix.with_name(prefix.name + "_gt_vs_group_models.png")
 
@@ -255,6 +294,42 @@ def write_outputs(
                 writer.writerow([case.name, databank, "Planck-band-gray", count, value, "", trans_model[idx], rad_model[idx]])
 
     gt_flux = integrated_flux_w_m2(wn, rad_lbl)
+    kitrt_flux = spectral_groups_flux_w_m2(kitrt_emitted_w_m2_sr)
+    kitrt_rel_error = abs(kitrt_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
+
+    with kitrt_groups_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "case",
+                "species",
+                "databank",
+                "group",
+                "wavenumber_cm_1",
+                "quadrature_weight_cm_1",
+                "kappa_1_per_m",
+                "source_radiance_W_m2_sr",
+                "path_length_m",
+                "gt_flux_W_m2",
+            ]
+        )
+        weights = trapezoid_weights(wn)
+        for idx, value in enumerate(wn):
+            writer.writerow(
+                [
+                    case.name,
+                    case.species,
+                    databank,
+                    idx,
+                    f"{value:.17g}",
+                    f"{weights[idx]:.17g}",
+                    f"{kitrt_kappa_1_per_m[idx]:.17g}",
+                    f"{kitrt_source_w_m2_sr[idx]:.17g}",
+                    f"{case.path_length_cm * 0.01:.17g}",
+                    f"{gt_flux:.17g}",
+                ]
+            )
+
     with summary_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(
@@ -297,6 +372,26 @@ def write_outputs(
                 f"{float(np.max(abscoeff)):.12g}",
             ]
         )
+        writer.writerow(
+            [
+                case.name,
+                case.species,
+                databank,
+                "KiT-RT-LBL-quadrature",
+                len(wn),
+                f"{elapsed_s:.6g}",
+                len(wn),
+                case.temperature_K,
+                case.pressure_bar,
+                case.mole_fraction,
+                case.path_length_cm,
+                f"{float(np.sum(kitrt_emitted_w_m2_sr) / 10.0):.12g}",
+                f"{kitrt_flux:.12g}",
+                f"{kitrt_rel_error:.12g}",
+                f"{float(np.mean(np.exp(-kitrt_kappa_1_per_m * (case.path_length_cm * 0.01)))):.12g}",
+                f"{float(np.max(abscoeff)):.12g}",
+            ]
+        )
         for count, (kappa_group, trans_model, rad_model) in models.items():
             model_flux = integrated_flux_w_m2(wn, rad_model)
             rel_error = abs(model_flux - gt_flux) / max(abs(gt_flux), 1.0e-300)
@@ -321,8 +416,8 @@ def write_outputs(
                 ]
             )
 
-    render_plot(plot_png, case, databank, wn, trans_lbl, rad_lbl, models, gt_flux)
-    return spectral_csv, summary_csv, plot_png
+    render_plot(plot_png, case, databank, wn, trans_lbl, rad_lbl, models, gt_flux, kitrt_flux)
+    return spectral_csv, kitrt_groups_csv, summary_csv, plot_png
 
 
 def render_plot(
@@ -334,6 +429,7 @@ def render_plot(
     rad_lbl: np.ndarray,
     models: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]],
     gt_flux: float,
+    kitrt_flux: float,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -370,7 +466,7 @@ def render_plot(
     axes[0].text(
         0.01,
         0.94,
-        f"GT hemispherical band flux: {gt_flux:.6g} W/m2",
+        f"GT flux: {gt_flux:.6g} W/m2\nKiT-RT LBL-quadrature err: {abs(kitrt_flux - gt_flux) / max(abs(gt_flux), 1.0e-300):.2e}",
         transform=axes[0].transAxes,
         fontsize=11,
         va="top",
@@ -416,8 +512,9 @@ def main() -> int:
             print(f"  failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             print("  rerun with --verbose for the full RADIS traceback", file=sys.stderr, flush=True)
             return 1
-        spectral_csv, summary_csv, plot_png = write_outputs(case, args.databank, elapsed_s, groups, spectrum, args.out_dir)
+        spectral_csv, kitrt_groups_csv, summary_csv, plot_png = write_outputs(case, args.databank, elapsed_s, groups, spectrum, args.out_dir)
         print(f"  wrote {spectral_csv}", flush=True)
+        print(f"  wrote {kitrt_groups_csv}", flush=True)
         print(f"  wrote {summary_csv}", flush=True)
         print(f"  wrote {plot_png}", flush=True)
 

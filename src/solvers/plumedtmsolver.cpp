@@ -106,6 +106,14 @@ double PlumeDTMSolver::IntegrateHomogeneousRay( double length, double kappa, dou
     return incomingIntensity * attenuation + source * ( 1.0 - attenuation );
 }
 
+PlumeDTMSolver::SpectralGasCellInput PlumeDTMSolver::LoadSpectralGasCellCSV( const std::string& filename ) {
+    return PlumeSpectralGasCell::LoadFixtureCSV( filename );
+}
+
+double PlumeDTMSolver::IntegrateSpectralGasCellFlux( const std::vector<SpectralGroup>& groups, double lengthM ) {
+    return PlumeSpectralGasCell::IntegrateHomogeneousSlabFlux( groups, lengthM );
+}
+
 PlumeDTMSolver::FieldData PlumeDTMSolver::MakeUniformField( double zMin,
                                                             double zMax,
                                                             double rMax,
