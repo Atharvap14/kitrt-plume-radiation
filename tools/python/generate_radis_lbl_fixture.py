@@ -16,6 +16,7 @@ import csv
 import math
 import os
 import signal
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -407,7 +408,14 @@ def main() -> int:
 
     for case in selected_cases(args.case):
         print(f"RADIS {args.databank.upper()} {case.name}: {case.note}", flush=True)
-        spectrum, elapsed_s = run_radis_case(case, args)
+        try:
+            spectrum, elapsed_s = run_radis_case(case, args)
+        except Exception as exc:
+            if args.verbose:
+                raise
+            print(f"  failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            print("  rerun with --verbose for the full RADIS traceback", file=sys.stderr, flush=True)
+            return 1
         spectral_csv, summary_csv, plot_png = write_outputs(case, args.databank, elapsed_s, groups, spectrum, args.out_dir)
         print(f"  wrote {spectral_csv}", flush=True)
         print(f"  wrote {summary_csv}", flush=True)
