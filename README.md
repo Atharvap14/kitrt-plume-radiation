@@ -33,6 +33,12 @@ python tools/python/plume_ray_sweep.py --backend mlx --spectrum demo-nongray --r
 
 See `doc/plume_non_gray_validation.rst` for candidate papers, code, and datasets
 for replacing the demo spectral groups with validated non-gray gas properties.
+If RadLib is cloned and built externally, validate a non-gray final-flux case
+against RadLib's shipped line-by-line reference data with:
+
+```bash
+python tools/python/validate_radlib_flux.py --case ex_S2 --radlib-root /path/to/radlib
+```
 
 
 

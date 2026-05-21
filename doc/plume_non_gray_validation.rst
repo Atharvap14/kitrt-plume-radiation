@@ -42,6 +42,15 @@ Most Useful Validation Sources
      and Fortran interfaces. It includes Planck mean, WSGG, and rank-correlated
      SLW models, plus 1D ray-tracing examples compared to line-by-line data.
      This is the best candidate for a practical property-model dependency.
+   * Local validation command after building RadLib externally:
+
+     .. code-block:: bash
+
+        python tools/python/validate_radlib_flux.py --case ex_S2 --radlib-root /path/to/radlib
+
+     On the Apple M3 test machine, the RadLib ex_S2 RCSLW-24 final-flux curve
+     matched the shipped LBL reference with max relative error 2.56e-3 and mean
+     relative error 9.22e-4.
 
 3. RADIS
 
