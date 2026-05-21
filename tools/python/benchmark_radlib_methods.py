@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -29,6 +29,9 @@ METHOD_SPECS = [
     ("rcslw", 16, "RCSLW-16"),
     ("rcslw", 24, "RCSLW-24"),
     ("rcslw", 25, "RCSLW-25"),
+    ("rcslw_local", 8, "RCSLW-local-8"),
+    ("rcslw_local", 16, "RCSLW-local-16"),
+    ("rcslw_local", 24, "RCSLW-local-24"),
 ]
 
 
@@ -248,6 +251,116 @@ def write_grouped_bar_svg(
     path.write_text(svg, encoding="utf-8")
 
 
+def write_gt_vs_model_svg(
+    path: Path,
+    case: str,
+    gt_x: np.ndarray,
+    gt_y: np.ndarray,
+    model_curves: Mapping[str, Tuple[np.ndarray, np.ndarray]],
+) -> None:
+    width = 1120
+    height = 700
+    left = 90
+    right = 280
+    top = 58
+    bottom = 82
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+
+    all_x = [gt_x]
+    all_y = [gt_y]
+    for x, y in model_curves.values():
+        all_x.append(x)
+        all_y.append(y)
+    xmin = float(np.min(np.concatenate(all_x)))
+    xmax = float(np.max(np.concatenate(all_x)))
+    ymin = float(np.min(np.concatenate(all_y)))
+    ymax = float(np.max(np.concatenate(all_y)))
+    ypad = 0.08 * max(ymax - ymin, 1.0e-9)
+    ymin -= ypad
+    ymax += ypad
+
+    def sx(value: float) -> float:
+        return left + (value - xmin) / (xmax - xmin) * plot_w
+
+    def sy(value: float) -> float:
+        return top + (ymax - value) / (ymax - ymin) * plot_h
+
+    palette = {
+        "GT LBL": "#111827",
+        "Planck Mean": "#8f2d56",
+        "WSGG": "#f28c28",
+        "RCSLW-4": "#6a994e",
+        "RCSLW-8": "#0077b6",
+        "RCSLW-16": "#7b2cbf",
+        "RCSLW-24": "#d00000",
+        "RCSLW-25": "#4d908e",
+        "RCSLW-local-8": "#00a896",
+        "RCSLW-local-16": "#ef476f",
+        "RCSLW-local-24": "#073b4c",
+    }
+
+    def polyline(x_values: np.ndarray, y_values: np.ndarray) -> str:
+        return " ".join(f"{sx(float(x)):.2f},{sy(float(y)):.2f}" for x, y in zip(x_values, y_values))
+
+    ticks: List[str] = []
+    for x in np.linspace(xmin, xmax, 6):
+        px = sx(float(x))
+        ticks.append(f'<line x1="{px:.2f}" y1="{top}" x2="{px:.2f}" y2="{top + plot_h}" class="grid"/>')
+        ticks.append(f'<text x="{px:.2f}" y="{height - 42}" text-anchor="middle">{x:.2g}</text>')
+    for y in np.linspace(ymin, ymax, 6):
+        py = sy(float(y))
+        ticks.append(f'<line x1="{left}" y1="{py:.2f}" x2="{left + plot_w}" y2="{py:.2f}" class="grid"/>')
+        ticks.append(f'<text x="{left - 12}" y="{py + 5:.2f}" text-anchor="end">{y:.3g}</text>')
+
+    lines: List[str] = [
+        f'<polyline points="{polyline(gt_x, gt_y)}" class="gt-line"/>',
+        "\n".join(
+            f'<circle cx="{sx(float(x)):.2f}" cy="{sy(float(y)):.2f}" r="5.2" class="gt-point"/>'
+            for x, y in zip(gt_x, gt_y)
+        ),
+    ]
+    legend: List[str] = []
+    legend_x = left + plot_w + 36
+    legend_y = top + 32
+    legend.append(f'<line x1="{legend_x}" y1="{legend_y}" x2="{legend_x + 42}" y2="{legend_y}" class="gt-line"/>')
+    legend.append(f'<text x="{legend_x + 54}" y="{legend_y + 5}">GT LBL</text>')
+
+    for idx, (label, (x_values, y_values)) in enumerate(model_curves.items(), start=1):
+        color = palette[label]
+        class_name = f"line-{idx}"
+        lines.append(
+            f'<polyline points="{polyline(x_values, y_values)}" '
+            f'style="fill:none;stroke:{color};stroke-width:2.4;stroke-linejoin:round;"/>'
+        )
+        ly = legend_y + idx * 30
+        legend.append(f'<line x1="{legend_x}" y1="{ly}" x2="{legend_x + 42}" y2="{ly}" style="stroke:{color};stroke-width:2.8;"/>')
+        legend.append(f'<text x="{legend_x + 54}" y="{ly + 5}">{label}</text>')
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<style>
+  text {{ font-family: Arial, Helvetica, sans-serif; fill: #1f2933; font-size: 15px; }}
+  .title {{ font-size: 24px; font-weight: 700; }}
+  .axis {{ stroke: #1f2933; stroke-width: 1.6; }}
+  .grid {{ stroke: #d5dde5; stroke-width: 1; }}
+  .gt-line {{ fill: none; stroke: #111827; stroke-width: 3.6; }}
+  .gt-point {{ fill: #111827; stroke: white; stroke-width: 1.4; }}
+</style>
+<rect width="100%" height="100%" fill="white"/>
+<text x="{left}" y="36" class="title">RadLib {case}: GT vs Non-Gray Models</text>
+{''.join(ticks)}
+<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" class="axis"/>
+<line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" class="axis"/>
+{''.join(lines)}
+<text x="{left + plot_w / 2:.2f}" y="{height - 12}" text-anchor="middle">Lcold (m)</text>
+<text transform="translate(24,{top + plot_h / 2:.2f}) rotate(-90)" text-anchor="middle">normalized final flux</text>
+{''.join(legend)}
+</svg>
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(svg, encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--radlib-root", default=os.environ.get("RADLIB_ROOT", "/tmp/radlib"))
@@ -256,6 +369,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--points-csv", default="tests/result/radlib_method_benchmark_points.csv")
     parser.add_argument("--speed-svg", default="tests/result/radlib_method_speed.svg")
     parser.add_argument("--fidelity-svg", default="tests/result/radlib_method_fidelity.svg")
+    parser.add_argument("--s1-curves-svg", default="tests/result/radlib_S1_gt_vs_models.svg")
+    parser.add_argument("--s2-curves-svg", default="tests/result/radlib_S2_gt_vs_models.svg")
     return parser.parse_args()
 
 
@@ -269,10 +384,14 @@ def main() -> None:
 
     records: List[BenchmarkRecord] = []
     point_rows: List[Sequence[object]] = []
+    gt_by_case: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    curves_by_case: Dict[str, Dict[str, Tuple[np.ndarray, np.ndarray]]] = {"S1": {}, "S2": {}}
     for case in ["S1", "S2"]:
         gt_x, gt_y = read_two_column_data(radlib_root / "examples" / "python" / "LBLdata" / f"ex_{case}_LBL.dat")
+        gt_by_case[case] = (gt_x, gt_y)
         for method, nGG, label in METHOD_SPECS:
             elapsed_s, model_x, model_y = run_driver(driver, case, method, nGG)
+            curves_by_case[case][label] = (model_x, model_y)
             model_y_at_gt = np.interp(gt_x, model_x, model_y)
             rel_errors = np.abs(model_y_at_gt - gt_y) / np.maximum(np.abs(gt_y), 1.0e-300)
             records.append(
@@ -307,6 +426,20 @@ def main() -> None:
         ylabel="max relative flux error",
         log_scale=True,
     )
+    write_gt_vs_model_svg(
+        repo_root / args.s1_curves_svg,
+        "S1",
+        gt_by_case["S1"][0],
+        gt_by_case["S1"][1],
+        curves_by_case["S1"],
+    )
+    write_gt_vs_model_svg(
+        repo_root / args.s2_curves_svg,
+        "S2",
+        gt_by_case["S2"][0],
+        gt_by_case["S2"][1],
+        curves_by_case["S2"],
+    )
 
     print("case,label,elapsed_s,max_rel_error,mean_rel_error")
     for row in records:
@@ -315,6 +448,8 @@ def main() -> None:
     print(f"points_csv,{args.points_csv}")
     print(f"speed_svg,{args.speed_svg}")
     print(f"fidelity_svg,{args.fidelity_svg}")
+    print(f"s1_curves_svg,{args.s1_curves_svg}")
+    print(f"s2_curves_svg,{args.s2_curves_svg}")
 
 
 if __name__ == "__main__":

@@ -46,6 +46,10 @@ Run the RadLib method speed/fidelity sweep:
 python tools/python/benchmark_radlib_methods.py --radlib-root /path/to/radlib
 ```
 
+The sweep includes experimental `RCSLW-local-*` source-split variants for
+screening. They are benchmark candidates only; use the LBL comparison results
+before treating any variant as a plume production model.
+
 
 
 ## Key Features

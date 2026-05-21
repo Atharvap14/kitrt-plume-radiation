@@ -64,6 +64,14 @@ Most Useful Validation Sources
      groups. That S1 behavior indicates spectral-model/reference-state bias,
      not Monte Carlo noise or an insufficient ray count.
 
+     A source-split local RCSLW experiment was also added. It transports hot
+     and cold/source-region emissions with separate reference states, then sums
+     the resulting fluxes. This improved S2 at 16 groups, but worsened S1
+     relative to the original single-reference RCSLW. Therefore the plume solver
+     should not be wired to this local RCSLW variant as a production model.
+     S1 needs a stronger treatment such as true full-spectrum correlated-k or
+     line-by-line/RADIS-derived tabulation.
+
 3. RADIS
 
    * Code: https://github.com/radis/radis

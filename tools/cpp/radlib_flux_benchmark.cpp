@@ -48,6 +48,7 @@ void intensity_implicit_trapezoid(const vector<double> &x,
                                   const vector<double> &temperature_k,
                                   const vector<vector<double>> &kabs,
                                   const vector<vector<double>> &awts,
+                                  const vector<double> &source_weight,
                                   const vector<double> &ilo,
                                   const vector<double> &ihi,
                                   vector<vector<double>> &intensity) {
@@ -65,8 +66,8 @@ void intensity_implicit_trapezoid(const vector<double> &x,
                 intensity[i + 1][j] =
                     (intensity[i][j] +
                      dx / mu * 0.5 *
-                         (kabs[i + 1][j] * awts[i + 1][j] * ib_next +
-                          kabs[i][j] * (awts[i][j] * ib_here - intensity[i][j]))) /
+                         (kabs[i + 1][j] * source_weight[i + 1] * awts[i + 1][j] * ib_next +
+                          kabs[i][j] * (source_weight[i] * awts[i][j] * ib_here - intensity[i][j]))) /
                     (1.0 + dx / mu * 0.5 * kabs[i + 1][j]);
             }
         }
@@ -82,18 +83,19 @@ void intensity_implicit_trapezoid(const vector<double> &x,
             intensity[i - 1][j] =
                 (intensity[i][j] +
                  dx / mu * 0.5 *
-                     (kabs[i - 1][j] * awts[i - 1][j] * ib_prev +
-                      kabs[i][j] * (awts[i][j] * ib_here - intensity[i][j]))) /
+                     (kabs[i - 1][j] * source_weight[i - 1] * awts[i - 1][j] * ib_prev +
+                      kabs[i][j] * (source_weight[i] * awts[i][j] * ib_here - intensity[i][j]))) /
                 (1.0 + dx / mu * 0.5 * kabs[i - 1][j]);
         }
     }
 }
 
-vector<double> solve_parallel_planes(rad &property_model,
-                                     double length_m,
-                                     int ntheta,
-                                     const FieldState &field,
-                                     double pressure_pa) {
+vector<double> solve_parallel_planes_with_properties(const vector<vector<double>> &kabs,
+                                                     const vector<vector<double>> &awts,
+                                                     const vector<double> &source_weight,
+                                                     double length_m,
+                                                     int ntheta,
+                                                     const FieldState &field) {
     const int nx = static_cast<int>(field.temperature_k.size());
     const double dx = length_m / static_cast<double>(nx - 1);
     vector<double> x(nx, 0.0);
@@ -101,9 +103,33 @@ vector<double> solve_parallel_planes(rad &property_model,
         x[i] = x[i - 1] + dx;
     }
 
-    const int nbands = property_model.get_nGGa();
-    vector<vector<double>> kabs(nx, vector<double>(nbands, 0.0));
-    vector<vector<double>> awts(nx, vector<double>(nbands, 0.0));
+    const int nbands = static_cast<int>(kabs[0].size());
+    const vector<double> ilo(nbands, 0.0);
+    const vector<double> ihi(nbands, 0.0);
+    vector<vector<double>> intensity(nx, vector<double>(nbands, 0.0));
+    vector<double> flux(nx, 0.0);
+    const double dtheta = M_PI / static_cast<double>(ntheta);
+
+    for (int j = 0; j < ntheta; ++j) {
+        const double theta = dtheta * (static_cast<double>(j) + 0.5);
+        intensity_implicit_trapezoid(x, theta, field.temperature_k, kabs, awts, source_weight, ilo, ihi, intensity);
+        for (int i = 0; i < nx; ++i) {
+            double band_sum = 0.0;
+            for (int k = 0; k < nbands; ++k) {
+                band_sum += intensity[i][k];
+            }
+            flux[i] += 2.0 * M_PI * dtheta * std::cos(theta) * std::sin(theta) * band_sum;
+        }
+    }
+    return flux;
+}
+
+void fill_properties(rad &property_model,
+                     const FieldState &field,
+                     double pressure_pa,
+                     vector<vector<double>> &kabs,
+                     vector<vector<double>> &awts) {
+    const int nx = static_cast<int>(field.temperature_k.size());
     for (int i = 0; i < nx; ++i) {
         property_model.get_k_a(kabs[i],
                                awts[i],
@@ -115,25 +141,73 @@ vector<double> solve_parallel_planes(rad &property_model,
                                field.x_co[i],
                                field.x_ch4[i]);
     }
+}
 
-    const vector<double> ilo(nbands, 0.0);
-    const vector<double> ihi(nbands, 0.0);
-    vector<vector<double>> intensity(nx, vector<double>(nbands, 0.0));
-    vector<double> flux(nx, 0.0);
-    const double dtheta = M_PI / static_cast<double>(ntheta);
+vector<double> solve_parallel_planes(rad &property_model,
+                                     double length_m,
+                                     int ntheta,
+                                     const FieldState &field,
+                                     double pressure_pa) {
+    const int nx = static_cast<int>(field.temperature_k.size());
+    const int nbands = property_model.get_nGGa();
+    vector<vector<double>> kabs(nx, vector<double>(nbands, 0.0));
+    vector<vector<double>> awts(nx, vector<double>(nbands, 0.0));
+    vector<double> source_weight(nx, 1.0);
+    fill_properties(property_model, field, pressure_pa, kabs, awts);
+    return solve_parallel_planes_with_properties(kabs, awts, source_weight, length_m, ntheta, field);
+}
 
-    for (int j = 0; j < ntheta; ++j) {
-        const double theta = dtheta * (static_cast<double>(j) + 0.5);
-        intensity_implicit_trapezoid(x, theta, field.temperature_k, kabs, awts, ilo, ihi, intensity);
+vector<double> solve_parallel_planes_local_rcslw(const CaseConfig &config,
+                                                 double length_m,
+                                                 int nGG,
+                                                 const FieldState &field) {
+    const int nx = static_cast<int>(field.temperature_k.size());
+    const int nbands = nGG + 1;
+    vector<double> total_flux(nx, 0.0);
+
+    auto add_reference = [&](rad_rcslw &model, const vector<double> &source_weight) {
+        vector<vector<double>> kabs(nx, vector<double>(nbands, 0.0));
+        vector<vector<double>> awts(nx, vector<double>(nbands, 0.0));
+        fill_properties(model, field, config.pressure_pa, kabs, awts);
+        vector<double> partial_flux =
+            solve_parallel_planes_with_properties(kabs, awts, source_weight, length_m, config.ntheta, field);
         for (int i = 0; i < nx; ++i) {
-            double band_sum = 0.0;
-            for (int k = 0; k < nbands; ++k) {
-                band_sum += intensity[i][k];
-            }
-            flux[i] += 2.0 * M_PI * dtheta * std::cos(theta) * std::sin(theta) * band_sum;
+            total_flux[i] += partial_flux[i];
         }
+    };
+
+    if (config.name == "S1") {
+        rad_rcslw hot_model(nGG, 2000.0, config.pressure_pa, 0.0, 0.2, 0.1, 0.0);
+        rad_rcslw cold_model(nGG, 300.0, config.pressure_pa, 0.0, 0.2, 0.1, 0.0);
+        vector<double> hot_source(nx, 0.0);
+        vector<double> cold_source(nx, 0.0);
+        for (int i = 0; i < nx; ++i) {
+            if (field.temperature_k[i] > 1000.0) {
+                hot_source[i] = 1.0;
+            } else {
+                cold_source[i] = 1.0;
+            }
+        }
+        add_reference(hot_model, hot_source);
+        add_reference(cold_model, cold_source);
+    } else if (config.name == "S2") {
+        rad_rcslw rich_model(nGG, 1000.0, config.pressure_pa, 0.0, 0.0, 0.4, 0.0);
+        rad_rcslw lean_model(nGG, 1000.0, config.pressure_pa, 0.0, 0.0, 0.1, 0.0);
+        vector<double> rich_source(nx, 0.0);
+        vector<double> lean_source(nx, 0.0);
+        for (int i = 0; i < nx; ++i) {
+            if (field.x_co2[i] > 0.25) {
+                rich_source[i] = 1.0;
+            } else {
+                lean_source[i] = 1.0;
+            }
+        }
+        add_reference(rich_model, rich_source);
+        add_reference(lean_model, lean_source);
+    } else {
+        throw std::runtime_error("Local RCSLW is only implemented for S1/S2");
     }
-    return flux;
+    return total_flux;
 }
 
 FieldState build_case_field(const CaseConfig &config, double cold_length_m) {
@@ -202,6 +276,9 @@ std::unique_ptr<rad> make_property_model(const string &method, const FieldState 
                                            field.rcslw_reference_x_co2,
                                            field.rcslw_reference_x_co);
     }
+    if (method == "rcslw_local") {
+        return nullptr;
+    }
     throw std::runtime_error("Unsupported method: " + method);
 }
 
@@ -237,8 +314,13 @@ int main(int argc, char **argv) {
         for (double cold_length_m : config.cold_lengths_m) {
             const double length_m = config.hot_length_m + cold_length_m;
             FieldState field = build_case_field(config, cold_length_m);
-            std::unique_ptr<rad> property_model = make_property_model(method, field, nGG, config.pressure_pa);
-            vector<double> flux = solve_parallel_planes(*property_model, length_m, config.ntheta, field, config.pressure_pa);
+            vector<double> flux;
+            if (method == "rcslw_local") {
+                flux = solve_parallel_planes_local_rcslw(config, length_m, nGG, field);
+            } else {
+                std::unique_ptr<rad> property_model = make_property_model(method, field, nGG, config.pressure_pa);
+                flux = solve_parallel_planes(*property_model, length_m, config.ntheta, field, config.pressure_pa);
+            }
             normalized_fluxes.push_back(normalize_flux(config.name, flux.back()));
         }
 
