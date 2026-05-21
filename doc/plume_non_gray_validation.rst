@@ -87,6 +87,31 @@ Most Useful Validation Sources
      ExoMol species. It can generate spectral absorption/emission data for
      H2O, CO2, CO, and other gases, and can serve as a reference generator for
      smaller validation fixtures.
+   * Local fixture generator:
+
+     .. code-block:: bash
+
+        python tools/python/generate_radis_lbl_fixture.py --case co2_hot_2300 --databank hitemp
+
+     RADIS HITEMP downloads require HITRAN credentials. Set
+     ``HITRAN_EMAIL`` and ``HITRAN_PASSWORD`` in the environment, or pass
+     ``--allow-stored-hitran-credentials`` if RADIS already has encrypted
+     credentials in its local config. The script refuses the HITEMP path
+     without credentials so failed downloads do not masquerade as validation.
+
+     For code-path smoke testing without credentials:
+
+     .. code-block:: bash
+
+        python tools/python/generate_radis_lbl_fixture.py \
+          --case co2_hot_2300,co_hot_2100 --databank hitran
+
+     The HITRAN mode writes RADIS LBL spectra, band-integrated hemispherical
+     gas-cell fluxes, and PNG plots comparing the LBL curve against simple
+     Planck-weighted band-gray reductions. On the Apple M3 test machine the
+     HITRAN smoke run completed for CO2 and CO, but RADIS correctly warned that
+     HITRAN is not valid high-temperature ground truth. HITEMP/RADIS should be
+     treated as the GT path once credentials are available.
 
 4. HITRAN HAPI
 

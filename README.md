@@ -55,6 +55,17 @@ For report-ready PNGs with visible legends and labels:
 python tools/python/render_radlib_method_pngs.py
 ```
 
+Generate small RADIS line-by-line gas-cell fixtures and GT-vs-model plots.
+HITEMP requires HITRAN credentials; HITRAN is useful only as a smoke test at
+plume temperatures:
+
+```bash
+HITRAN_EMAIL=you@example.com HITRAN_PASSWORD=... \
+  python tools/python/generate_radis_lbl_fixture.py --case co2_hot_2300 --databank hitemp
+
+python tools/python/generate_radis_lbl_fixture.py --case co2_hot_2300,co_hot_2100 --databank hitran
+```
+
 
 
 ## Key Features
