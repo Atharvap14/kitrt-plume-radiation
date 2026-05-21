@@ -72,6 +72,13 @@ Most Useful Validation Sources
      S1 needs a stronger treatment such as true full-spectrum correlated-k or
      line-by-line/RADIS-derived tabulation.
 
+     The benchmark also writes SVGs. For chat/report previews where SVG
+     thumbnailing may crop legends, render direct PNGs with:
+
+     .. code-block:: bash
+
+        python tools/python/render_radlib_method_pngs.py
+
 3. RADIS
 
    * Code: https://github.com/radis/radis
