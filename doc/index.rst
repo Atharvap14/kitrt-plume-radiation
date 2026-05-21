@@ -30,6 +30,7 @@ Table of contents
    configFiles
    solvers_overview
    physics
+   plume_non_gray_validation
    implement
    cpp_doc
    developer_guide

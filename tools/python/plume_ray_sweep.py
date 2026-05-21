@@ -7,7 +7,9 @@ The estimator is Monte Carlo over upper-hemisphere ray directions:
 
 It reports the standard error of that flux estimate for each base-radius
 sample. The synthetic field is intentionally analytic so all backends run the
-same workload without file I/O.
+same workload without file I/O. The default model is gray. The demo non-gray
+mode uses fixed spectral groups to exercise banded transport plumbing; it is
+not a substitute for a validated HITEMP/RADIS/RadLib property model.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ class SweepConfig:
     kappa_z_scale: float
     kappa_r_scale: float
     output_csv: Optional[str]
+    spectrum: str
 
 
 def parse_rays(text: str) -> List[int]:
@@ -78,6 +81,19 @@ def ray_samples(num_rays: int, seed: int) -> Tuple[np.ndarray, np.ndarray]:
     return mu, phi
 
 
+def spectral_groups(spectrum: str, dtype=np.float64) -> Tuple[np.ndarray, np.ndarray]:
+    if spectrum == "gray":
+        return np.array([1.0], dtype=dtype), np.array([1.0], dtype=dtype)
+    if spectrum == "demo-nongray":
+        # Five fixed groups: one transparent window and four absorbing bands.
+        # These values are intentionally synthetic until real gas-property data
+        # are connected through RADIS/HAPI/RadLib-derived fixtures.
+        weights = np.array([0.10, 0.14, 0.24, 0.32, 0.20], dtype=dtype)
+        kappa_scales = np.array([0.0, 0.08, 0.45, 1.60, 6.50], dtype=dtype)
+        return weights, kappa_scales
+    raise ValueError(f"Unsupported spectrum: {spectrum}")
+
+
 def _finalize_stats(sum_y: np.ndarray, sum_y2: np.ndarray, num_rays: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     flux = np.float64(2.0 * math.pi) * sum_y / np.float64(num_rays)
     variance_y = (sum_y2 - sum_y * sum_y / np.float64(num_rays)) / np.float64(max(num_rays - 1, 1))
@@ -89,6 +105,7 @@ def _finalize_stats(sum_y: np.ndarray, sum_y2: np.ndarray, num_rays: int) -> Tup
 
 def _record(
     backend: str,
+    spectrum: str,
     rays: int,
     elapsed_s: float,
     flux: np.ndarray,
@@ -99,6 +116,7 @@ def _record(
 ) -> dict:
     return {
         "backend": backend,
+        "spectrum": spectrum,
         "ranks": ranks,
         "rays": rays,
         "elapsed_s": elapsed_s,
@@ -117,13 +135,13 @@ def _print_records(records: Iterable[dict], rank: int = 0) -> None:
     if rank != 0:
         return
     print(
-        "backend,ranks,rays,elapsed_s,rays_per_s,mean_flux,max_abs_se,"
+        "backend,spectrum,ranks,rays,elapsed_s,rays_per_s,mean_flux,max_abs_se,"
         "mean_rel_se,max_rel_se,target_met",
         flush=True,
     )
     for row in records:
         print(
-            f"{row['backend']},{row['ranks']},{row['rays']},"
+            f"{row['backend']},{row['spectrum']},{row['ranks']},{row['rays']},"
             f"{row['elapsed_s']:.6f},{row['rays_per_s']:.2f},"
             f"{row['mean_flux']:.9e},{row['max_standard_error']:.9e},"
             f"{row['mean_relative_standard_error']:.9e},"
@@ -135,6 +153,7 @@ def _print_records(records: Iterable[dict], rank: int = 0) -> None:
 def _write_csv(path: str, records: Sequence[dict]) -> None:
     fieldnames = [
         "backend",
+        "spectrum",
         "ranks",
         "rays",
         "elapsed_s",
@@ -157,6 +176,7 @@ def _write_csv(path: str, records: Sequence[dict]) -> None:
 
 def _integrate_numpy(mu: np.ndarray, phi: np.ndarray, config: SweepConfig, radii: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     radii64 = radii.astype(np.float64)
+    band_weights, band_kappa_scales = spectral_groups(config.spectrum, dtype=np.float64)
     sum_y = np.zeros(radii64.shape[0], dtype=np.float64)
     sum_y2 = np.zeros(radii64.shape[0], dtype=np.float64)
     num_steps = int(math.ceil(config.max_distance / config.step))
@@ -169,7 +189,7 @@ def _integrate_numpy(mu: np.ndarray, phi: np.ndarray, config: SweepConfig, radii
         cos_phi = np.cos(phi_c)
         sin_phi = np.sin(phi_c)
 
-        intensity = np.zeros((radii64.shape[0], stop - start), dtype=np.float64)
+        intensity = np.zeros((band_weights.shape[0], radii64.shape[0], stop - start), dtype=np.float64)
         transmittance = np.ones_like(intensity)
 
         for idx_step in range(num_steps):
@@ -187,18 +207,19 @@ def _integrate_numpy(mu: np.ndarray, phi: np.ndarray, config: SweepConfig, radii
             temperature = config.ambient_temperature + config.peak_temperature * np.exp(
                 -((z - config.z_center) / config.z_scale) ** 2 - (r / config.r_scale) ** 2
             )
-            kappa = config.kappa_floor + config.kappa_peak * np.exp(
+            base_kappa = config.kappa_floor + config.kappa_peak * np.exp(
                 -z / config.kappa_z_scale - (r / config.kappa_r_scale) ** 2
             )
             temperature = np.where(inside, temperature, 0.0)
-            kappa = np.where(inside, kappa, 0.0)
+            base_kappa = np.where(inside, base_kappa, 0.0)
+            kappa = band_kappa_scales[:, None, None] * base_kappa[None, :, :]
 
             attenuation = np.exp(-np.minimum(kappa * ds, 700.0))
-            blackbody = (SIGMA_SB / math.pi) * temperature**4
+            blackbody = band_weights[:, None, None] * (SIGMA_SB / math.pi) * temperature[None, :, :] ** 4
             intensity += transmittance * blackbody * (1.0 - attenuation)
             transmittance *= attenuation
 
-        contribution = intensity * mu_c[None, :]
+        contribution = np.sum(intensity, axis=0) * mu_c[None, :]
         sum_y += np.sum(contribution, axis=1)
         sum_y2 += np.sum(contribution * contribution, axis=1)
 
@@ -214,7 +235,9 @@ def run_cpu(config: SweepConfig, backend_name: str = "cpu") -> List[dict]:
         sum_y, sum_y2 = _integrate_numpy(mu, phi, config, radii)
         elapsed = time.perf_counter() - t0
         flux, se, rel_se = _finalize_stats(sum_y, sum_y2, rays)
-        records.append(_record(backend_name, rays, elapsed, flux, se, rel_se, target_rel_se=config.target_rel_se))
+        records.append(
+            _record(backend_name, config.spectrum, rays, elapsed, flux, se, rel_se, target_rel_se=config.target_rel_se)
+        )
     return records
 
 
@@ -243,7 +266,9 @@ def run_mpi(config: SweepConfig) -> List[dict]:
 
         if rank == 0:
             flux, se, rel_se = _finalize_stats(sum_y, sum_y2, rays)
-            records.append(_record("mpi", rays, elapsed, flux, se, rel_se, ranks=size, target_rel_se=config.target_rel_se))
+            records.append(
+                _record("mpi", config.spectrum, rays, elapsed, flux, se, rel_se, ranks=size, target_rel_se=config.target_rel_se)
+            )
     return records
 
 
@@ -256,6 +281,9 @@ def run_mlx(config: SweepConfig) -> List[dict]:
     mx.set_default_device(mx.gpu)
     radii = base_radii(config)
     radii_mx = mx.array(radii, dtype=mx.float32)
+    band_weights_np, band_kappa_scales_np = spectral_groups(config.spectrum, dtype=np.float32)
+    band_weights = mx.array(band_weights_np, dtype=mx.float32)
+    band_kappa_scales = mx.array(band_kappa_scales_np, dtype=mx.float32)
     records: List[dict] = []
     num_steps = int(math.ceil(config.max_distance / config.step))
 
@@ -273,7 +301,7 @@ def run_mlx(config: SweepConfig) -> List[dict]:
             sin_theta = mx.sqrt(mx.maximum(mx.array(0.0, dtype=mx.float32), 1.0 - mu * mu))
             cos_phi = mx.cos(phi)
             sin_phi = mx.sin(phi)
-            intensity = mx.zeros((radii.shape[0], stop - start), dtype=mx.float32)
+            intensity = mx.zeros((band_weights_np.shape[0], radii.shape[0], stop - start), dtype=mx.float32)
             transmittance = mx.ones_like(intensity)
 
             for idx_step in range(num_steps):
@@ -291,20 +319,21 @@ def run_mlx(config: SweepConfig) -> List[dict]:
                 temperature = config.ambient_temperature + config.peak_temperature * mx.exp(
                     -((z - config.z_center) / config.z_scale) ** 2 - (r / config.r_scale) ** 2
                 )
-                kappa = config.kappa_floor + config.kappa_peak * mx.exp(
+                base_kappa = config.kappa_floor + config.kappa_peak * mx.exp(
                     -z / config.kappa_z_scale - (r / config.kappa_r_scale) ** 2
                 )
                 temperature = mx.where(inside, temperature, 0.0)
-                kappa = mx.where(inside, kappa, 0.0)
+                base_kappa = mx.where(inside, base_kappa, 0.0)
+                kappa = band_kappa_scales[:, None, None] * base_kappa[None, :, :]
 
                 attenuation = mx.exp(-mx.minimum(kappa * ds, 700.0))
-                blackbody = np.float32(SIGMA_SB / math.pi) * temperature**4
+                blackbody = band_weights[:, None, None] * np.float32(SIGMA_SB / math.pi) * temperature[None, :, :] ** 4
                 intensity = intensity + transmittance * blackbody * (1.0 - attenuation)
                 transmittance = transmittance * attenuation
                 if (idx_step + 1) % 32 == 0:
                     mx.eval(intensity, transmittance)
 
-            contribution = intensity * mu[None, :]
+            contribution = mx.sum(intensity, axis=0) * mu[None, :]
             sum_y = sum_y + mx.sum(contribution, axis=1)
             sum_y2 = sum_y2 + mx.sum(contribution * contribution, axis=1)
             mx.eval(sum_y, sum_y2)
@@ -314,13 +343,19 @@ def run_mlx(config: SweepConfig) -> List[dict]:
         sum_y_np = np.array(sum_y, dtype=np.float64)
         sum_y2_np = np.array(sum_y2, dtype=np.float64)
         flux, se, rel_se = _finalize_stats(sum_y_np, sum_y2_np, rays)
-        records.append(_record("mlx", rays, elapsed, flux, se, rel_se, target_rel_se=config.target_rel_se))
+        records.append(_record("mlx", config.spectrum, rays, elapsed, flux, se, rel_se, target_rel_se=config.target_rel_se))
     return records
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["mlx", "mpi", "cpu"], required=True)
+    parser.add_argument(
+        "--spectrum",
+        choices=["gray", "demo-nongray"],
+        default="gray",
+        help="Radiative property model. demo-nongray uses synthetic spectral groups for backend testing.",
+    )
     parser.add_argument("--rays", default="1024,2048,4096,8192,16384,32768,65536")
     parser.add_argument("--base-samples", type=int, default=8)
     parser.add_argument("--base-radius", type=float, default=1.0)
@@ -374,6 +409,7 @@ def config_from_args(args: argparse.Namespace) -> SweepConfig:
         kappa_z_scale=args.kappa_z_scale,
         kappa_r_scale=args.kappa_r_scale,
         output_csv=args.output_csv,
+        spectrum=args.spectrum,
     )
 
 

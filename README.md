@@ -24,6 +24,16 @@ Generate a standalone synthetic plume fixture:
 python tools/python/generate_plume_fixture.py examples/plume_radiation/synthetic_field.csv
 ```
 
+Run a standalone MLX/MPI/CPU ray-sampling sweep, including a synthetic
+multi-group non-gray mode for backend testing:
+
+```bash
+python tools/python/plume_ray_sweep.py --backend mlx --spectrum demo-nongray --rays 1024,2048,4096
+```
+
+See `doc/plume_non_gray_validation.rst` for candidate papers, code, and datasets
+for replacing the demo spectral groups with validated non-gray gas properties.
+
 
 
 ## Key Features
